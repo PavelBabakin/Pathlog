@@ -83,12 +83,23 @@ struct ContentView: View {
     }
 }
 
+struct RoutePoint: Identifiable {
+    let id = UUID()
+    let latitude: Double
+    let longitude: Double
+    let timestamp: Date
+    let horizontalAccuracy: Double
+    let altitude: Double
+    let speed: Double
+}
+
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cameraPosition: MapCameraPosition = .automatic
     @Published var statusMessage = "Requesting your location..."
     @Published var shouldShowPermissionButton = false
     @Published var isTracking = false
     @Published var collectedPointCount = 0
+    @Published private(set) var routePoints: [RoutePoint] = []
 
     var canTrack: Bool {
         switch manager.authorizationStatus {
@@ -143,8 +154,23 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             return
         }
 
-        isTracking.toggle()
-        statusMessage = isTracking ? "Tracking is active." : "Showing your current location."
+        if isTracking {
+            stopTracking()
+        } else {
+            startTracking()
+        }
+    }
+
+    private func startTracking() {
+        routePoints = []
+        collectedPointCount = 0
+        isTracking = true
+        statusMessage = "Tracking is active."
+    }
+
+    private func stopTracking() {
+        isTracking = false
+        statusMessage = "Tracking stopped with \(collectedPointCount) points."
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -160,6 +186,20 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
                 span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
             )
         )
+
+        guard isTracking else { return }
+
+        let routePoint = RoutePoint(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            timestamp: location.timestamp,
+            horizontalAccuracy: location.horizontalAccuracy,
+            altitude: location.altitude,
+            speed: location.speed
+        )
+
+        routePoints.append(routePoint)
+        collectedPointCount = routePoints.count
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
