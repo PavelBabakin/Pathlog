@@ -1,2 +1,0 @@
-Target dependency graph (1 target)
-Target 'Pathlog' in project 'Pathlog' (no dependencies)
