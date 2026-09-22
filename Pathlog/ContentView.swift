@@ -8,7 +8,10 @@
 import MapKit
 import CoreLocation
 import Combine
+import SQLite3
 import SwiftUI
+
+private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
@@ -89,7 +92,7 @@ struct ContentView: View {
 }
 
 struct RoutePoint: Identifiable {
-    let id = UUID()
+    let id: UUID
     let latitude: Double
     let longitude: Double
     let timestamp: Date
@@ -112,6 +115,12 @@ struct RoutePoint: Identifiable {
     }
 }
 
+struct RouteSession: Identifiable {
+    let id: UUID
+    let startedAt: Date
+    var endedAt: Date?
+}
+
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cameraPosition: MapCameraPosition = .automatic
     @Published var statusMessage = "Requesting your location..."
@@ -121,9 +130,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published private(set) var routePoints: [RoutePoint] = []
 
     var routeCoordinates: [CLLocationCoordinate2D] {
-        routePoints.map { point in
-            CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
-        }
+        routePoints.map(\.coordinate)
     }
 
     var canTrack: Bool {
@@ -151,6 +158,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private let manager = CLLocationManager()
     private let locationFilter = TrackingLocationFilter()
+    private let routeHistoryStore = RouteHistoryStore()
+    private var activeSessionID: UUID?
+    private var activeSessionStartedAt: Date?
 
     override init() {
         super.init()
@@ -188,6 +198,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func startTracking() {
+        let session = RouteSession(id: UUID(), startedAt: Date(), endedAt: nil)
+        routeHistoryStore.createSession(session)
+        activeSessionID = session.id
+        activeSessionStartedAt = session.startedAt
         routePoints = []
         collectedPointCount = 0
         isTracking = true
@@ -196,6 +210,11 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func stopTracking() {
         isTracking = false
+        if let activeSessionID {
+            routeHistoryStore.finishSession(id: activeSessionID, endedAt: Date())
+        }
+        activeSessionID = nil
+        activeSessionStartedAt = nil
         statusMessage = "Tracking stopped with \(collectedPointCount) points."
     }
 
@@ -219,8 +238,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
         guard locationFilter.shouldAccept(location, after: routePoints.last) else { return }
 
-        routePoints.append(RoutePoint(location: location))
+        let routePoint = RoutePoint(location: location)
+        routePoints.append(routePoint)
         collectedPointCount = routePoints.count
+
+        if let activeSessionID {
+            routeHistoryStore.insertPoint(routePoint, sessionID: activeSessionID)
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -244,6 +268,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
 private extension RoutePoint {
     init(location: CLLocation) {
+        self.id = UUID()
         self.latitude = location.coordinate.latitude
         self.longitude = location.coordinate.longitude
         self.timestamp = location.timestamp
@@ -302,5 +327,234 @@ private struct TrackingLocationFilter {
         }
 
         return true
+    }
+}
+
+private final class RouteHistoryStore {
+    private let fileManager: FileManager
+    private var database: OpaquePointer?
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        openDatabase()
+        createTables()
+    }
+
+    deinit {
+        if let database {
+            sqlite3_close(database)
+        }
+    }
+
+    func createSession(_ session: RouteSession) {
+        let sql = """
+            INSERT INTO route_sessions (id, started_at, ended_at)
+            VALUES (?, ?, ?);
+            """
+
+        withPreparedStatement(sql) { statement in
+            bind(session.id.uuidString, to: statement, at: 1)
+            bind(session.startedAt.timeIntervalSince1970, to: statement, at: 2)
+            sqlite3_bind_null(statement, 3)
+            step(statement)
+        }
+    }
+
+    func finishSession(id: UUID, endedAt: Date) {
+        let sql = """
+            UPDATE route_sessions
+            SET ended_at = ?
+            WHERE id = ?;
+            """
+
+        withPreparedStatement(sql) { statement in
+            bind(endedAt.timeIntervalSince1970, to: statement, at: 1)
+            bind(id.uuidString, to: statement, at: 2)
+            step(statement)
+        }
+    }
+
+    func insertPoint(_ point: RoutePoint, sessionID: UUID) {
+        let sql = """
+            INSERT INTO route_points (
+                id,
+                session_id,
+                latitude,
+                longitude,
+                timestamp,
+                horizontal_accuracy,
+                altitude,
+                speed
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """
+
+        withPreparedStatement(sql) { statement in
+            bind(point.id.uuidString, to: statement, at: 1)
+            bind(sessionID.uuidString, to: statement, at: 2)
+            bind(point.latitude, to: statement, at: 3)
+            bind(point.longitude, to: statement, at: 4)
+            bind(point.timestamp.timeIntervalSince1970, to: statement, at: 5)
+            bind(point.horizontalAccuracy, to: statement, at: 6)
+            bind(point.altitude, to: statement, at: 7)
+            bind(point.speed, to: statement, at: 8)
+            step(statement)
+        }
+    }
+
+    func loadPoints(from startDate: Date, to endDate: Date) -> [RoutePoint] {
+        let sql = """
+            SELECT
+                id,
+                latitude,
+                longitude,
+                timestamp,
+                horizontal_accuracy,
+                altitude,
+                speed
+            FROM route_points
+            WHERE timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp ASC;
+            """
+        var points: [RoutePoint] = []
+
+        withPreparedStatement(sql) { statement in
+            bind(startDate.timeIntervalSince1970, to: statement, at: 1)
+            bind(endDate.timeIntervalSince1970, to: statement, at: 2)
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let id = stringValue(from: statement, at: 0).flatMap(UUID.init(uuidString:)) else {
+                    continue
+                }
+
+                points.append(
+                    RoutePoint(
+                        id: id,
+                        latitude: sqlite3_column_double(statement, 1),
+                        longitude: sqlite3_column_double(statement, 2),
+                        timestamp: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
+                        horizontalAccuracy: sqlite3_column_double(statement, 4),
+                        altitude: sqlite3_column_double(statement, 5),
+                        speed: sqlite3_column_double(statement, 6)
+                    )
+                )
+            }
+        }
+
+        return points
+    }
+
+    private func openDatabase() {
+        do {
+            let databaseURL = routeHistoryDatabaseURL()
+            try fileManager.createDirectory(
+                at: databaseURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+
+            if sqlite3_open(databaseURL.path, &database) != SQLITE_OK {
+                assertionFailure("Failed to open Pathlog database.")
+            }
+        } catch {
+            assertionFailure("Failed to prepare Pathlog database directory: \(error.localizedDescription)")
+        }
+    }
+
+    private func createTables() {
+        execute("""
+            CREATE TABLE IF NOT EXISTS route_sessions (
+                id TEXT PRIMARY KEY NOT NULL,
+                started_at REAL NOT NULL,
+                ended_at REAL
+            );
+            """)
+
+        execute("""
+            CREATE TABLE IF NOT EXISTS route_points (
+                id TEXT PRIMARY KEY NOT NULL,
+                session_id TEXT NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                timestamp REAL NOT NULL,
+                horizontal_accuracy REAL NOT NULL,
+                altitude REAL NOT NULL,
+                speed REAL NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES route_sessions(id) ON DELETE CASCADE
+            );
+            """)
+
+        execute("""
+            CREATE INDEX IF NOT EXISTS idx_route_points_session_timestamp
+            ON route_points(session_id, timestamp);
+            """)
+
+        execute("""
+            CREATE INDEX IF NOT EXISTS idx_route_points_timestamp
+            ON route_points(timestamp);
+            """)
+    }
+
+    private func execute(_ sql: String) {
+        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+            assertionFailure("SQLite execution failed: \(lastDatabaseErrorMessage)")
+            return
+        }
+    }
+
+    private func withPreparedStatement(_ sql: String, body: (OpaquePointer?) -> Void) {
+        var statement: OpaquePointer?
+
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            assertionFailure("SQLite prepare failed: \(lastDatabaseErrorMessage)")
+            return
+        }
+
+        defer {
+            sqlite3_finalize(statement)
+        }
+
+        body(statement)
+    }
+
+    private func bind(_ value: String, to statement: OpaquePointer?, at index: Int32) {
+        sqlite3_bind_text(statement, index, value, -1, sqliteTransient)
+    }
+
+    private func bind(_ value: Double, to statement: OpaquePointer?, at index: Int32) {
+        sqlite3_bind_double(statement, index, value)
+    }
+
+    private func step(_ statement: OpaquePointer?) {
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            assertionFailure("SQLite step failed: \(lastDatabaseErrorMessage)")
+            return
+        }
+    }
+
+    private func stringValue(from statement: OpaquePointer?, at index: Int32) -> String? {
+        guard let text = sqlite3_column_text(statement, index) else {
+            return nil
+        }
+
+        return String(cString: text)
+    }
+
+    private var lastDatabaseErrorMessage: String {
+        guard let errorPointer = sqlite3_errmsg(database) else {
+            return "Unknown SQLite error."
+        }
+
+        return String(cString: errorPointer)
+    }
+
+    private func routeHistoryDatabaseURL() -> URL {
+        let applicationSupportURL = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+
+        return applicationSupportURL
+            .appendingPathComponent("Pathlog", isDirectory: true)
+            .appendingPathComponent("pathlog.sqlite")
     }
 }
