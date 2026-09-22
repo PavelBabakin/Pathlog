@@ -16,6 +16,11 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $locationManager.cameraPosition) {
+                if locationManager.routeCoordinates.count >= 2 {
+                    MapPolyline(coordinates: locationManager.routeCoordinates)
+                        .stroke(.blue, lineWidth: 5)
+                }
+
                 UserAnnotation()
             }
             .mapControls {
@@ -101,6 +106,12 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var collectedPointCount = 0
     @Published private(set) var routePoints: [RoutePoint] = []
 
+    var routeCoordinates: [CLLocationCoordinate2D] {
+        routePoints.map { point in
+            CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+        }
+    }
+
     var canTrack: Bool {
         switch manager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
@@ -180,6 +191,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
 
+        updateStatusAfterLocationUpdate()
+
         cameraPosition = .region(
             MKCoordinateRegion(
                 center: location.coordinate,
@@ -203,6 +216,20 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        if !isTracking && collectedPointCount > 0 {
+            return
+        }
+
         statusMessage = "Could not get your location: \(error.localizedDescription)"
+    }
+
+    private func updateStatusAfterLocationUpdate() {
+        shouldShowPermissionButton = false
+
+        if isTracking {
+            statusMessage = "Tracking is active."
+        } else {
+            statusMessage = "Showing your current location."
+        }
     }
 }

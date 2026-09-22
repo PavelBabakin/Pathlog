@@ -24,7 +24,8 @@ Potential use cases:
 - view the route for a day;
 - find a previously visited place;
 - keep a private local archive of movement history;
-- stop recording in private or sensitive areas.
+- stop recording in private or sensitive areas;
+- save notes about places discovered along the way.
 
 ## Product Principles
 
@@ -48,9 +49,11 @@ The first complete version should support:
 - recording route points locally;
 - drawing the route on the map;
 - selecting history by calendar date and time;
+- selecting a single day or a range of days from a calendar;
 - showing the user's position at a selected time;
 - playing back a route with a timeline slider, similar to scrubbing through a video;
-- creating private zones where route points are not recorded.
+- creating private zones where route points are not recorded;
+- adding map notes with text and photos.
 
 ## Out of Scope for the First MVP
 
@@ -115,7 +118,8 @@ Core local data:
 - timestamps;
 - location accuracy;
 - tracking settings;
-- private zones.
+- private zones;
+- map notes.
 
 The app should store as much local history as is reasonably possible on the device. The user must be able to delete history manually.
 
@@ -151,13 +155,54 @@ PrivacyZone
 - isEnabled
 ```
 
+Initial map note model:
+
+```text
+MapNote
+- id
+- latitude
+- longitude
+- title
+- text
+- photoLocalPaths
+- createdAt
+- source
+- relatedPlaceName
+- relatedPlaceIdentifier
+```
+
+## Map Notes
+
+Pathlog should let the user save personal notes on the map. A note can be attached to the user's current position or to a selected object on the map, such as a cafe, shop, building, or other point of interest.
+
+Expected behavior:
+
+- the map has an add button for creating a note at the current position;
+- the user can add text to the note;
+- the user can attach one or more photos;
+- the note is stored locally on the device;
+- notes are visible on the map as separate markers;
+- notes can be opened later while browsing the map or route history;
+- when possible, the user can select an existing map object or point of interest and attach a note to that place instead of only attaching it to the current route point.
+
+Example use case: the user sees a cafe while walking, opens Pathlog, taps the add button, attaches a note and photo, and writes: "Great place, recommend to friends."
+
 ## Timeline and Playback
 
 History should be selected through a calendar and time controls. After selecting a date or time range, the user should be able to scrub through the route using a playback-style timeline.
 
+Calendar selection should be opened from a dedicated control, such as a timeline or calendar button. The user should be able to browse any year, month, and day, then choose a single day or a range of days.
+
+Calendar days that contain recorded pathlogs should be visually highlighted. This should make it easy to distinguish active days from days with no recorded movement history.
+
+The calendar should also support an "active days only" mode. In this mode, the calendar should show or emphasize only days that contain recorded pathlog activity, helping the user navigate long histories faster.
+
+After choosing a day or date range, the user can optionally choose a specific time or time range. If no time range is selected, Pathlog should show the full route for the selected day or date range.
+
 Expected playback behavior:
 
 - the map shows the route for the selected date or time range;
+- the map supports route display for a single day or multiple selected days;
 - a slider controls the current playback position;
 - moving the slider updates the user's position on the map;
 - the route can visually fill in as the timeline moves forward;
@@ -184,9 +229,11 @@ The first milestone is already implemented: the app shows a map, requests locati
 5. Persist route points locally.
 6. Add a basic day history view.
 7. Add timeline playback for a selected date.
-8. Add the first version of private zones.
-9. Add background tracking.
-10. Add local tracking reminder notifications.
+8. Add map notes for current position.
+9. Add notes for selected map places or points of interest.
+10. Add the first version of private zones.
+11. Add background tracking.
+12. Add local tracking reminder notifications.
 
 ## Open Questions
 
@@ -194,3 +241,5 @@ The first milestone is already implemented: the app shows a map, requests locati
 - What local storage technology should be used for long-term route history?
 - What visual style should represent private-zone gaps on the map?
 - What export formats should be supported later?
+- How should map notes be displayed alongside route history and private-zone gaps?
+- What photo storage strategy should be used for local map notes?
