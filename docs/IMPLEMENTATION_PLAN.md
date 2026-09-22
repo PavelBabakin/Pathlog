@@ -2,16 +2,20 @@
 
 ## Current Status
 
-The project currently has the first milestone implemented:
+The project currently has the first three implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
 - the app shows the user's current location;
+- the user can start and stop tracking;
+- the app records route points in memory while tracking is active;
+- the app shows the collected point count;
+- the app draws the recorded route as a line on the map;
 - the project builds successfully.
 
 ## Implementation Phases
 
-### 1. Tracking Session UI
+### 1. Tracking Session UI - Completed
 
 Add the basic controls needed to start and stop tracking.
 
@@ -28,7 +32,11 @@ Done when:
 - the user can stop tracking;
 - the UI clearly reflects the current tracking state.
 
-### 2. In-Memory Route Recording
+Status:
+
+- completed.
+
+### 2. In-Memory Route Recording - Completed
 
 Record route points while tracking is active, without local persistence yet.
 
@@ -45,7 +53,11 @@ Done when:
 - stopping tracking prevents new points from being added;
 - the app can show how many points were collected.
 
-### 3. Route Line on the Map
+Status:
+
+- completed.
+
+### 3. Route Line on the Map - Completed
 
 Draw the collected route as a visible line on the map.
 
@@ -62,7 +74,11 @@ Done when:
 - the line grows as new valid points arrive;
 - stopping tracking keeps the existing line visible.
 
-### 4. Basic Location Filtering
+Status:
+
+- completed.
+
+### 4. Basic Location Filtering - Next
 
 Avoid storing obviously bad or noisy route points.
 
@@ -123,7 +139,13 @@ Add route playback with a calendar and timeline controls.
 
 Scope:
 
-- select a date or time range;
+- open a calendar from a dedicated timeline or calendar control;
+- browse any year, month, and day;
+- select a single day;
+- select a range of days;
+- highlight days that contain recorded pathlog data;
+- provide an active-days-only mode for focusing the calendar on days with recorded activity;
+- optionally select a specific time or time range after choosing the date scope;
 - show a playback slider;
 - move the current position marker as the slider changes;
 - visually fill the route as playback progresses;
@@ -131,10 +153,54 @@ Scope:
 
 Done when:
 
-- the user can scrub through a recorded route like a video timeline;
+- the user can choose a recorded day from a calendar;
+- the user can visually distinguish days with activity from empty days;
+- the user can switch to a calendar mode focused on active days;
+- the user can select a single day or a date range;
+- the user can optionally narrow the result to a time range;
+- the user can scrub through the selected route like a video timeline;
 - the map updates to show the route state at the selected moment.
 
-### 8. Private Zones
+### 8. Map Notes
+
+Add user-created notes on the map.
+
+Scope:
+
+- add a map button for creating a note at the current position;
+- store note text locally;
+- attach one or more local photos to a note;
+- show notes as markers on the map;
+- open note details from the map;
+- support notes during route history browsing.
+
+Done when:
+
+- the user can create a note at the current location;
+- the user can add text and photos to the note;
+- the note remains available after app restart;
+- notes are visible and tappable on the map.
+
+### 9. Place-Based Map Notes
+
+Allow notes to be attached to selected map objects or points of interest, not only to the user's current position or route point.
+
+Scope:
+
+- detect or select nearby map places when possible;
+- let the user choose a cafe, shop, building, or other point of interest;
+- attach note text and photos to the selected place;
+- store the selected place name and identifier when available;
+- show place-based notes on the map.
+
+Done when:
+
+- the user can select a visible or nearby map place;
+- the user can attach a note to that place;
+- the note remains connected to the place when browsing later;
+- the experience still works when a place identifier is unavailable by falling back to coordinates.
+
+### 10. Private Zones
 
 Add areas where route points are not saved.
 
@@ -151,7 +217,7 @@ Done when:
 - route gaps are visible and understandable on the map;
 - the user can enable or disable a private zone.
 
-### 9. Background Tracking
+### 11. Background Tracking
 
 Allow tracking to continue after the app leaves the foreground.
 
@@ -168,7 +234,7 @@ Done when:
 - the app records useful route points in background conditions;
 - the user can stop tracking after returning to the app.
 
-### 10. Local Tracking Notifications
+### 12. Local Tracking Notifications
 
 Add occasional local notifications while tracking is active.
 
@@ -189,14 +255,16 @@ Done when:
 
 The next milestone is:
 
-> Start/Stop Tracking + in-memory route recording + route line on the map.
+> Basic location filtering.
 
-This is the first milestone where Pathlog becomes a real route tracker rather than only a map with the user's current location.
+This milestone should make recorded routes cleaner by ignoring low-quality, duplicate, or overly frequent location updates.
 
 ## Later Work
 
 Planned for later phases:
 
+- map notes for current position;
+- notes attached to selected map places or points of interest;
 - history deletion by date or time range;
 - delete all history;
 - data export;
