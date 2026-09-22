@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first four implementation phases completed:
+The project currently has the first five implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -12,6 +12,7 @@ The project currently has the first four implementation phases completed:
 - the app shows the collected point count;
 - the app draws the recorded route as a line on the map;
 - the app applies conservative filtering to remove only clearly low-quality location points;
+- the app persists route sessions locally in SQLite;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -107,7 +108,7 @@ Status:
 
 - completed.
 
-### 5. Local Persistence
+### 5. Local Persistence - Completed
 
 Store route history locally on the device.
 
@@ -120,16 +121,52 @@ Scope:
 
 Preferred direction:
 
-- evaluate SQLite for long-term route history because the app may store many location points;
-- keep SwiftData as an option if it remains simple and performs well enough.
+- use SQLite for long-term route history because the app may store many location points and needs efficient queries by date and time range;
+- keep storage APIs isolated behind a small store type so the rest of the app does not depend on raw SQL.
+
+Initial implementation:
+
+- route sessions and route points are stored locally in a SQLite database in the app's Application Support directory;
+- route points are written during active tracking so the current route can survive app restarts as stored data;
+- stored points can be queried by date and time range;
+- the app does not automatically draw the latest stored route on launch;
+- after restart, the default map behavior should focus on the user's current location;
+- stored routes should be loaded onto the map only through history, timeline, or persisted-route map-layer features.
 
 Done when:
 
 - route points survive app restarts;
-- the app can load previous history;
+- the app can query previous history by date and time range;
 - storage is structured enough to support deletion by date or time range later.
 
-### 6. Basic History View
+Status:
+
+- completed.
+
+### 6. Persisted Routes Map Layer
+
+Show previously walked routes on the map as a persistent historical layer without replacing the current-location experience.
+
+Scope:
+
+- load stored route segments from SQLite for the currently visible map region or selected time scope;
+- draw previously walked routes as a subdued map overlay;
+- keep the current live tracking route visually distinct from historical routes;
+- use different colors or visual styles for historical routes and the current tracking session;
+- make overlapping routes distinguishable when the user walks along a previously recorded path again;
+- avoid loading all historical points at once when the database becomes large;
+- provide a way to hide or show the persisted route layer;
+- keep app launch focused on the user's current location, not on the latest stored route.
+
+Done when:
+
+- the map can show already walked routes from local storage;
+- historical route overlays do not block current-location tracking;
+- historical routes and the current live route remain visually distinguishable, including when they overlap;
+- the app can keep the overlay performant by querying only the needed data;
+- the user can understand the difference between current tracking and previous routes.
+
+### 7. Basic History View
 
 Let the user inspect previously recorded history.
 
@@ -145,7 +182,7 @@ Done when:
 - the user can view a recorded route from a previous session;
 - the route is loaded from local storage, not memory.
 
-### 7. Timeline Playback
+### 8. Timeline Playback
 
 Add route playback with a calendar and timeline controls.
 
@@ -173,7 +210,7 @@ Done when:
 - the user can scrub through the selected route like a video timeline;
 - the map updates to show the route state at the selected moment.
 
-### 8. Map Notes
+### 9. Map Notes
 
 Add user-created notes on the map.
 
@@ -193,7 +230,7 @@ Done when:
 - the note remains available after app restart;
 - notes are visible and tappable on the map.
 
-### 9. Place-Based Map Notes
+### 10. Place-Based Map Notes
 
 Allow notes to be attached to selected map objects or points of interest, not only to the user's current position or route point.
 
@@ -212,7 +249,7 @@ Done when:
 - the note remains connected to the place when browsing later;
 - the experience still works when a place identifier is unavailable by falling back to coordinates.
 
-### 10. Private Zones
+### 11. Private Zones
 
 Add areas where route points are not saved.
 
@@ -229,7 +266,7 @@ Done when:
 - route gaps are visible and understandable on the map;
 - the user can enable or disable a private zone.
 
-### 11. Background Tracking
+### 12. Background Tracking
 
 Allow tracking to continue after the app leaves the foreground.
 
@@ -246,7 +283,7 @@ Done when:
 - the app records useful route points in background conditions;
 - the user can stop tracking after returning to the app.
 
-### 12. Local Tracking Notifications
+### 13. Local Tracking Notifications
 
 Add occasional local notifications while tracking is active.
 
@@ -263,7 +300,7 @@ Done when:
 - notifications are useful and not noisy;
 - notifications do not require a backend.
 
-### 13. Storage and Tracking Impact
+### 14. Storage and Tracking Impact
 
 Show the user how much local data Pathlog stores and provide transparent tracking impact information.
 
@@ -289,9 +326,9 @@ Done when:
 
 The next milestone is:
 
-> Local persistence.
+> Persisted routes map layer.
 
-This milestone should make route history survive app restarts and prepare the app for calendar-based history browsing, deletion, and export later.
+This milestone should start using persisted SQLite data in the UI without changing the default launch behavior of showing the user's current location.
 
 ## Later Work
 
