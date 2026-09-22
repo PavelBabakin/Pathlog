@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first three implementation phases completed:
+The project currently has the first four implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -11,6 +11,7 @@ The project currently has the first three implementation phases completed:
 - the app records route points in memory while tracking is active;
 - the app shows the collected point count;
 - the app draws the recorded route as a line on the map;
+- the app applies conservative filtering to remove only clearly low-quality location points;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -78,7 +79,7 @@ Status:
 
 - completed.
 
-### 4. Basic Location Filtering - Next
+### 4. Basic Location Filtering - Completed
 
 Avoid storing obviously bad or noisy route points.
 
@@ -89,11 +90,22 @@ Scope:
 - avoid points that arrive too frequently to be useful;
 - keep the rules simple and adjustable.
 
+Filtering direction:
+
+- use conservative filtering only;
+- do not remove small-area movement just because it happens in one place;
+- preserve valid use cases such as running laps on a stadium or moving inside a covered venue;
+- use private zones later for places where the user does not want tracking, such as home or office.
+
 Done when:
 
 - collected routes are reasonably clean;
 - point count does not grow from duplicate stationary updates;
 - filtering rules are easy to revise later.
+
+Status:
+
+- completed.
 
 ### 5. Local Persistence
 
@@ -251,13 +263,35 @@ Done when:
 - notifications are useful and not noisy;
 - notifications do not require a backend.
 
+### 13. Storage and Tracking Impact
+
+Show the user how much local data Pathlog stores and provide transparent tracking impact information.
+
+Scope:
+
+- show the approximate size of locally stored Pathlog data;
+- separate route history, map notes, photos, exports, and other local app data when possible;
+- show how many route points, sessions, notes, and photos are stored;
+- provide shortcuts to delete selected history, delete all history, or manage large data groups once deletion features exist;
+- show tracking activity metrics that affect battery usage, such as active tracking time, background tracking time, location update count, and selected accuracy mode;
+- estimate battery impact from app-owned tracking metrics where possible;
+- clearly communicate that iOS does not provide normal apps with exact per-app battery usage data inside the app;
+- guide users to iOS Settings for Apple's official per-app battery usage view when needed.
+
+Done when:
+
+- the user can see how much storage Pathlog data uses;
+- the user can understand which stored data categories use the most space;
+- the user can see recent tracking activity metrics that explain likely battery impact;
+- battery information is presented as an estimate or activity summary, not as exact system battery usage.
+
 ## Near-Term Milestone
 
 The next milestone is:
 
-> Basic location filtering.
+> Local persistence.
 
-This milestone should make recorded routes cleaner by ignoring low-quality, duplicate, or overly frequent location updates.
+This milestone should make route history survive app restarts and prepare the app for calendar-based history browsing, deletion, and export later.
 
 ## Later Work
 
@@ -268,6 +302,8 @@ Planned for later phases:
 - history deletion by date or time range;
 - delete all history;
 - data export;
+- storage usage insights;
+- tracking impact and battery transparency;
 - battery and accuracy tuning;
 - App Store readiness;
 - Android exploration.

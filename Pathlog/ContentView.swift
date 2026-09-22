@@ -96,6 +96,20 @@ struct RoutePoint: Identifiable {
     let horizontalAccuracy: Double
     let altitude: Double
     let speed: Double
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var location: CLLocation {
+        CLLocation(
+            coordinate: coordinate,
+            altitude: altitude,
+            horizontalAccuracy: horizontalAccuracy,
+            verticalAccuracy: kCLLocationAccuracyBest,
+            timestamp: timestamp
+        )
+    }
 }
 
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
@@ -136,6 +150,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private let manager = CLLocationManager()
+    private let locationFilter = TrackingLocationFilter()
 
     override init() {
         super.init()
@@ -202,16 +217,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
         guard isTracking else { return }
 
-        let routePoint = RoutePoint(
-            latitude: location.coordinate.latitude,
-            longitude: location.coordinate.longitude,
-            timestamp: location.timestamp,
-            horizontalAccuracy: location.horizontalAccuracy,
-            altitude: location.altitude,
-            speed: location.speed
-        )
+        guard locationFilter.shouldAccept(location, after: routePoints.last) else { return }
 
-        routePoints.append(routePoint)
+        routePoints.append(RoutePoint(location: location))
         collectedPointCount = routePoints.count
     }
 
@@ -231,5 +239,68 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         } else {
             statusMessage = "Showing your current location."
         }
+    }
+}
+
+private extension RoutePoint {
+    init(location: CLLocation) {
+        self.latitude = location.coordinate.latitude
+        self.longitude = location.coordinate.longitude
+        self.timestamp = location.timestamp
+        self.horizontalAccuracy = location.horizontalAccuracy
+        self.altitude = location.altitude
+        self.speed = location.speed
+    }
+}
+
+private struct TrackingLocationFilter {
+    private let maximumHorizontalAccuracy: CLLocationAccuracy = 100
+    private let duplicateDistanceThreshold: CLLocationDistance = 1
+    private let duplicateTimeThreshold: TimeInterval = 5
+    private let tooFrequentTimeThreshold: TimeInterval = 1
+    private let tooFrequentDistanceThreshold: CLLocationDistance = 5
+    private let maximumReasonableSpeed: CLLocationSpeed = 80
+
+    func shouldAccept(_ location: CLLocation, after previousPoint: RoutePoint?) -> Bool {
+        guard CLLocationCoordinate2DIsValid(location.coordinate) else {
+            return false
+        }
+
+        guard location.horizontalAccuracy >= 0 else {
+            return false
+        }
+
+        guard location.horizontalAccuracy <= maximumHorizontalAccuracy else {
+            return false
+        }
+
+        guard let previousPoint else {
+            return true
+        }
+
+        let previousLocation = previousPoint.location
+        let elapsedTime = location.timestamp.timeIntervalSince(previousPoint.timestamp)
+
+        guard elapsedTime > 0 else {
+            return false
+        }
+
+        let distance = location.distance(from: previousLocation)
+
+        if elapsedTime < duplicateTimeThreshold && distance < duplicateDistanceThreshold {
+            return false
+        }
+
+        if elapsedTime < tooFrequentTimeThreshold && distance < tooFrequentDistanceThreshold {
+            return false
+        }
+
+        let calculatedSpeed = distance / elapsedTime
+
+        if calculatedSpeed > maximumReasonableSpeed {
+            return false
+        }
+
+        return true
     }
 }
