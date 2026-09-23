@@ -21,6 +21,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var isHistoryPresented = false
     @State private var isNoteEditorPresented = false
+    @State private var isStorageImpactPresented = false
     @State private var selectedMapNote: MapNote?
 
     var body: some View {
@@ -92,6 +93,7 @@ struct ContentView: View {
             locationManager.requestLocationAccess()
         }
         .onChange(of: scenePhase) { _, newPhase in
+            locationManager.handleScenePhase(newPhase)
             if newPhase == .active {
                 locationManager.refreshTrackingReminder()
             }
@@ -189,13 +191,23 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Button {
-                isHistoryPresented = true
-            } label: {
-                Label("History", systemImage: "calendar")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                Button {
+                    isHistoryPresented = true
+                } label: {
+                    Label("History", systemImage: "calendar")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    isStorageImpactPresented = true
+                } label: {
+                    Label("Storage & Impact", systemImage: "externaldrive")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
 
             Button {
                 isNoteEditorPresented = true
@@ -260,6 +272,10 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isNoteEditorPresented) {
             NoteEditorView(locationManager: locationManager)
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $isStorageImpactPresented) {
+            StorageImpactView(locationManager: locationManager)
                 .presentationDetents([.medium, .large])
         }
         .sheet(item: $selectedMapNote) { note in
@@ -677,6 +693,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var selectedHistoryDate = Date()
     @Published var playbackProgress = 1.0
     @Published var collectedPointCount = 0
+    @Published private(set) var locationUpdateCount = 0
     @Published private(set) var routePoints: [RoutePoint] = []
     @Published private(set) var historicalRouteSegments: [HistoricalRouteSegment] = []
     @Published private(set) var selectedHistoryRoutePoints: [RoutePoint] = []
@@ -685,6 +702,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published private(set) var mapNotes: [MapNote] = []
     @Published private(set) var nearbyPlaceCandidates: [MapPlaceCandidate] = []
     @Published private(set) var isSearchingNearbyPlaces = false
+    @Published private(set) var storageUsageSummary: LocalStorageSummary?
+    @Published private(set) var latestTrackingActivitySummary: TrackingActivitySummary?
 
     var routeCoordinates: [CLLocationCoordinate2D] {
         routePoints.map(\.coordinate)
@@ -783,6 +802,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private var mapCenterCoordinate: CLLocationCoordinate2D?
     private var activeSessionID: UUID?
     private var activeSessionStartedAt: Date?
+    private var accumulatedBackgroundDuration: TimeInterval = 0
+    private var backgroundStartedAt: Date?
 
     override init() {
         super.init()
@@ -877,6 +898,44 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
                 requestBackgroundLocationAccess()
             }
         }
+    }
+
+    func handleScenePhase(_ phase: ScenePhase) {
+        guard isTracking else { return }
+
+        if phase == .background {
+            if backgroundStartedAt == nil {
+                backgroundStartedAt = Date()
+            }
+        } else if phase == .active {
+            finishBackgroundPeriod(at: Date())
+        }
+    }
+
+    func refreshStorageAndImpact() {
+        storageUsageSummary = routeHistoryStore.loadStorageSummary()
+        latestTrackingActivitySummary = routeHistoryStore.loadLatestTrackingActivitySummary()
+    }
+
+    func trackingActivitySummary(at date: Date) -> TrackingActivitySummary? {
+        guard isTracking, let activeSessionStartedAt else {
+            return latestTrackingActivitySummary
+        }
+
+        let duration = max(0, date.timeIntervalSince(activeSessionStartedAt))
+        var backgroundDuration = accumulatedBackgroundDuration
+        if let backgroundStartedAt {
+            backgroundDuration += max(0, date.timeIntervalSince(backgroundStartedAt))
+        }
+
+        return TrackingActivitySummary(
+            startedAt: activeSessionStartedAt,
+            endedAt: nil,
+            trackingDuration: duration,
+            backgroundDuration: min(duration, backgroundDuration),
+            locationUpdateCount: locationUpdateCount,
+            savedPointCount: collectedPointCount
+        )
     }
 
     func toggleHistoricalRoutesVisibility() {
@@ -998,6 +1057,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         activeSessionStartedAt = session.startedAt
         routePoints = []
         collectedPointCount = 0
+        locationUpdateCount = 0
+        accumulatedBackgroundDuration = 0
+        backgroundStartedAt = nil
         isTracking = true
         configureBackgroundTracking()
         manager.startUpdatingLocation()
@@ -1010,13 +1072,20 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func stopTracking() {
+        let stoppedAt = Date()
+        finishBackgroundPeriod(at: stoppedAt)
         isTracking = false
         configureBackgroundTracking()
         trackingNotificationService.cancelTrackingReminder()
         reminderStatusMessage = nil
         shouldOpenNotificationSettings = false
         if let activeSessionID {
-            routeHistoryStore.finishSession(id: activeSessionID, endedAt: Date())
+            routeHistoryStore.finishSession(
+                id: activeSessionID,
+                endedAt: stoppedAt,
+                backgroundDuration: accumulatedBackgroundDuration,
+                locationUpdateCount: locationUpdateCount
+            )
         }
         activeSessionID = nil
         activeSessionStartedAt = nil
@@ -1024,6 +1093,14 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         reloadActiveDaySummaries()
         routePoints = []
         statusMessage = "Tracking stopped with \(collectedPointCount) points."
+        refreshStorageAndImpact()
+    }
+
+    private func finishBackgroundPeriod(at date: Date) {
+        guard let backgroundStartedAt else { return }
+
+        accumulatedBackgroundDuration += max(0, date.timeIntervalSince(backgroundStartedAt))
+        self.backgroundStartedAt = nil
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -1040,6 +1117,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         latestKnownCoordinate = location.coordinate
+
+        if isTracking {
+            locationUpdateCount += locations.count
+        }
 
         updateStatusAfterLocationUpdate()
 
@@ -1249,18 +1330,112 @@ private final class RouteHistoryStore {
         }
     }
 
-    func finishSession(id: UUID, endedAt: Date) {
+    func finishSession(
+        id: UUID,
+        endedAt: Date,
+        backgroundDuration: TimeInterval,
+        locationUpdateCount: Int
+    ) {
         let sql = """
             UPDATE route_sessions
-            SET ended_at = ?
+            SET ended_at = ?, background_seconds = ?, location_update_count = ?
             WHERE id = ?;
             """
 
         withPreparedStatement(sql) { statement in
             bind(endedAt.timeIntervalSince1970, to: statement, at: 1)
-            bind(id.uuidString, to: statement, at: 2)
+            bind(backgroundDuration, to: statement, at: 2)
+            sqlite3_bind_int64(statement, 3, sqlite3_int64(max(0, locationUpdateCount)))
+            bind(id.uuidString, to: statement, at: 4)
             step(statement)
         }
+    }
+
+    func loadStorageSummary() -> LocalStorageSummary {
+        var sessionCount = 0
+        var routePointCount = 0
+        var noteCount = 0
+        var photoCount = 0
+
+        withPreparedStatement("""
+            SELECT
+                (SELECT COUNT(*) FROM route_sessions),
+                (SELECT COUNT(*) FROM route_points),
+                (SELECT COUNT(*) FROM map_notes),
+                (SELECT COUNT(*) FROM map_note_photos);
+            """) { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW else { return }
+            sessionCount = Int(sqlite3_column_int64(statement, 0))
+            routePointCount = Int(sqlite3_column_int64(statement, 1))
+            noteCount = Int(sqlite3_column_int64(statement, 2))
+            photoCount = Int(sqlite3_column_int64(statement, 3))
+        }
+
+        let databaseURL = routeHistoryDatabaseURL()
+        let databaseURLs = [
+            databaseURL,
+            URL(fileURLWithPath: databaseURL.path + "-wal"),
+            URL(fileURLWithPath: databaseURL.path + "-shm"),
+            URL(fileURLWithPath: databaseURL.path + "-journal")
+        ]
+        let databaseBytes = databaseURLs.reduce(Int64(0)) { $0 + fileSize(at: $1) }
+        let photosDirectory = applicationSupportPathlogURL()
+            .appendingPathComponent("NotePhotos", isDirectory: true)
+        let photoBytes = directorySize(at: photosDirectory)
+        let totalBytes = directorySize(at: applicationSupportPathlogURL())
+
+        return LocalStorageSummary(
+            totalBytes: totalBytes,
+            databaseBytes: databaseBytes,
+            photoBytes: photoBytes,
+            otherBytes: max(0, totalBytes - databaseBytes - photoBytes),
+            sessionCount: sessionCount,
+            routePointCount: routePointCount,
+            noteCount: noteCount,
+            photoCount: photoCount
+        )
+    }
+
+    func loadLatestTrackingActivitySummary() -> TrackingActivitySummary? {
+        let sql = """
+            SELECT
+                s.started_at,
+                s.ended_at,
+                s.background_seconds,
+                CASE
+                    WHEN s.location_update_count > 0 THEN s.location_update_count
+                    ELSE (SELECT COUNT(*) FROM route_points p WHERE p.session_id = s.id)
+                END,
+                (SELECT COUNT(*) FROM route_points p WHERE p.session_id = s.id)
+            FROM route_sessions s
+            WHERE s.ended_at IS NOT NULL
+            ORDER BY s.ended_at DESC
+            LIMIT 1;
+            """
+        var summary: TrackingActivitySummary?
+
+        withPreparedStatement(sql) { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW else { return }
+
+            let startedAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
+            let endedAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 1))
+            let duration = max(0, endedAt.timeIntervalSince(startedAt))
+            let backgroundDuration = min(
+                duration,
+                max(0, sqlite3_column_double(statement, 2))
+            )
+
+            summary = TrackingActivitySummary(
+                startedAt: startedAt,
+                endedAt: endedAt,
+                trackingDuration: duration,
+                backgroundDuration: backgroundDuration,
+                locationUpdateCount: Int(sqlite3_column_int64(statement, 3)),
+                savedPointCount: Int(sqlite3_column_int64(statement, 4))
+            )
+        }
+
+        return summary
     }
 
     func insertPoint(_ point: RoutePoint, sessionID: UUID) {
@@ -1531,9 +1706,22 @@ private final class RouteHistoryStore {
             CREATE TABLE IF NOT EXISTS route_sessions (
                 id TEXT PRIMARY KEY NOT NULL,
                 started_at REAL NOT NULL,
-                ended_at REAL
+                ended_at REAL,
+                background_seconds REAL NOT NULL DEFAULT 0,
+                location_update_count INTEGER NOT NULL DEFAULT 0
             );
             """)
+
+        addColumnIfNeeded(
+            table: "route_sessions",
+            column: "background_seconds",
+            definition: "REAL NOT NULL DEFAULT 0"
+        )
+        addColumnIfNeeded(
+            table: "route_sessions",
+            column: "location_update_count",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
 
         execute("""
             CREATE TABLE IF NOT EXISTS route_points (
@@ -1734,6 +1922,34 @@ private final class RouteHistoryStore {
         try data.write(to: fileURL, options: [.atomic])
 
         return fileURL
+    }
+
+    private func fileSize(at url: URL) -> Int64 {
+        guard
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+            values.isRegularFile == true
+        else {
+            return 0
+        }
+
+        return Int64(values.fileSize ?? 0)
+    }
+
+    private func directorySize(at url: URL) -> Int64 {
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var totalBytes: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            totalBytes += fileSize(at: fileURL)
+        }
+
+        return totalBytes
     }
 
     private var lastDatabaseErrorMessage: String {

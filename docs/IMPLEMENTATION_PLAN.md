@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first twelve implementation phases completed:
+The project currently has the first thirteen implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -20,6 +20,9 @@ The project currently has the first twelve implementation phases completed:
 - the app communicates whether background tracking is enabled or limited to foreground use;
 - the app can send quiet local reminders while tracking is active;
 - tracking reminders stop when the user stops tracking;
+- the app shows approximate local data usage and stored item counts;
+- the app shows recent tracking time, background time, location updates, and accuracy mode;
+- the app explains battery impact as activity context and directs users to Settings > Battery for Apple's per-app report;
 - the app can create local map notes with text and photos;
 - the app can attach map notes to nearby places when MapKit returns place data;
 - the project builds successfully.
@@ -388,7 +391,7 @@ Status:
 
 - completed.
 
-### 13. Storage and Tracking Impact
+### 13. Storage and Tracking Impact - Completed
 
 Show the user how much local data Pathlog stores and provide transparent tracking impact information.
 
@@ -400,7 +403,7 @@ Scope:
 - provide shortcuts to delete selected history, delete all history, or manage large data groups once deletion features exist;
 - show tracking activity metrics that affect battery usage, such as active tracking time, background tracking time, location update count, and selected accuracy mode;
 - estimate battery impact from app-owned tracking metrics where possible;
-- clearly communicate that iOS does not provide normal apps with exact per-app battery usage data inside the app;
+- clearly distinguish Pathlog's activity summary from Apple's per-app battery report;
 - guide users to iOS Settings for Apple's official per-app battery usage view when needed.
 
 Done when:
@@ -409,6 +412,19 @@ Done when:
 - the user can understand which stored data categories use the most space;
 - the user can see recent tracking activity metrics that explain likely battery impact;
 - battery information is presented as an estimate or activity summary, not as exact system battery usage.
+
+Initial implementation:
+
+- the Storage & Impact sheet shows approximate Application Support usage, SQLite size, photo size, and unclassified local files;
+- the sheet shows route session, point, note, and photo counts from SQLite;
+- completed sessions store background duration and location update count; the sheet shows these alongside tracking duration and recorded route points;
+- the accuracy mode is identified as best available and fixed in this version;
+- battery guidance describes tracking activity without claiming an exact battery percentage and points to Settings > Battery;
+- deletion shortcuts remain deferred until history deletion features are implemented.
+
+Status:
+
+- completed.
 
 ### 14. Private Zones
 
@@ -431,21 +447,17 @@ Done when:
 
 The next milestone is:
 
-> Storage and tracking impact.
+> Private Zones.
 
-This milestone should explain local storage use and the app's tracking activity and likely battery impact.
+This milestone should let the user exclude sensitive areas from route recording while keeping the route gap visible.
 
 ## Later Work
 
 Planned for later phases:
 
-- map notes for current position;
-- notes attached to selected map places or points of interest;
 - history deletion by date or time range;
 - delete all history;
 - data export;
-- storage usage insights;
-- tracking impact and battery transparency;
 - battery and accuracy tuning;
 - App Store readiness;
 - Android exploration.
