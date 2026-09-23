@@ -15,6 +15,7 @@ private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self
 
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
+    @State private var isHistoryPresented = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -26,6 +27,11 @@ struct ContentView: View {
                                 .stroke(.gray.opacity(0.55), lineWidth: 4)
                         }
                     }
+                }
+
+                if locationManager.selectedHistoryRouteCoordinates.count >= 2 {
+                    MapPolyline(coordinates: locationManager.selectedHistoryRouteCoordinates)
+                        .stroke(.orange, lineWidth: 6)
                 }
 
                 if locationManager.routeCoordinates.count >= 2 {
@@ -91,6 +97,31 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             }
 
+            if let selectedHistorySummary = locationManager.selectedHistorySummary {
+                HStack {
+                    Label("Selected day", systemImage: "calendar")
+                        .font(.subheadline.weight(.medium))
+
+                    Spacer()
+
+                    Text("\(selectedHistorySummary.pointCount) points")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(selectedHistorySummary.timeRangeText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                isHistoryPresented = true
+            } label: {
+                Label("History", systemImage: "calendar")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
             HStack {
                 Label(
                     locationManager.trackingStateText,
@@ -118,6 +149,63 @@ struct ContentView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial)
+        .sheet(isPresented: $isHistoryPresented) {
+            HistoryView(locationManager: locationManager)
+                .presentationDetents([.medium, .large])
+        }
+    }
+}
+
+struct HistoryView: View {
+    @ObservedObject var locationManager: LocationManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Date") {
+                    DatePicker(
+                        "Route date",
+                        selection: $locationManager.selectedHistoryDate,
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+
+                    Button {
+                        locationManager.loadHistoryForSelectedDate()
+                    } label: {
+                        Label("Show Route", systemImage: "map")
+                    }
+                }
+
+                Section("Selected Route") {
+                    if let selectedHistorySummary = locationManager.selectedHistorySummary {
+                        LabeledContent("Points", value: "\(selectedHistorySummary.pointCount)")
+                        LabeledContent("Time", value: selectedHistorySummary.timeRangeText)
+
+                        Button(role: .destructive) {
+                            locationManager.clearSelectedHistoryRoute()
+                        } label: {
+                            Label("Clear Selection", systemImage: "xmark.circle")
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            "No Route Selected",
+                            systemImage: "map",
+                            description: Text("Choose a date with recorded route points.")
+                        )
+                    }
+                }
+            }
+            .navigationTitle("History")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -156,18 +244,39 @@ struct HistoricalRouteSegment: Identifiable {
     let coordinates: [CLLocationCoordinate2D]
 }
 
+struct HistoryRouteSummary {
+    let pointCount: Int
+    let startDate: Date
+    let endDate: Date
+
+    var timeRangeText: String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+
+        return "\(formatter.string(from: startDate)) - \(formatter.string(from: endDate))"
+    }
+}
+
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cameraPosition: MapCameraPosition = .automatic
     @Published var statusMessage = "Requesting your location..."
     @Published var shouldShowPermissionButton = false
     @Published var isTracking = false
     @Published var isHistoricalRoutesVisible = true
+    @Published var selectedHistoryDate = Date()
     @Published var collectedPointCount = 0
     @Published private(set) var routePoints: [RoutePoint] = []
     @Published private(set) var historicalRouteSegments: [HistoricalRouteSegment] = []
+    @Published private(set) var selectedHistoryRoutePoints: [RoutePoint] = []
+    @Published private(set) var selectedHistorySummary: HistoryRouteSummary?
 
     var routeCoordinates: [CLLocationCoordinate2D] {
         routePoints.map(\.coordinate)
+    }
+
+    var selectedHistoryRouteCoordinates: [CLLocationCoordinate2D] {
+        selectedHistoryRoutePoints.map(\.coordinate)
     }
 
     var historicalRouteCount: Int {
@@ -243,6 +352,36 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         isHistoricalRoutesVisible.toggle()
     }
 
+    func loadHistoryForSelectedDate() {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: selectedHistoryDate)
+
+        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else {
+            return
+        }
+
+        let points = routeHistoryStore.loadPoints(from: startOfDay, to: endOfDay)
+        selectedHistoryRoutePoints = points
+
+        if let firstPoint = points.first, let lastPoint = points.last {
+            selectedHistorySummary = HistoryRouteSummary(
+                pointCount: points.count,
+                startDate: firstPoint.timestamp,
+                endDate: lastPoint.timestamp
+            )
+            focusCamera(on: points)
+            statusMessage = "Loaded \(points.count) points for the selected day."
+        } else {
+            selectedHistorySummary = nil
+            statusMessage = "No route history found for the selected day."
+        }
+    }
+
+    func clearSelectedHistoryRoute() {
+        selectedHistoryRoutePoints = []
+        selectedHistorySummary = nil
+    }
+
     private func startTracking() {
         let session = RouteSession(id: UUID(), startedAt: Date(), endedAt: nil)
         routeHistoryStore.createSession(session)
@@ -315,6 +454,37 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func reloadHistoricalRouteSegments() {
         historicalRouteSegments = routeHistoryStore.loadHistoricalRouteSegments()
+    }
+
+    private func focusCamera(on points: [RoutePoint]) {
+        let coordinates = points.map(\.coordinate)
+
+        guard let firstCoordinate = coordinates.first else {
+            return
+        }
+
+        let latitudeValues = coordinates.map(\.latitude)
+        let longitudeValues = coordinates.map(\.longitude)
+        let minimumLatitude = latitudeValues.min() ?? firstCoordinate.latitude
+        let maximumLatitude = latitudeValues.max() ?? firstCoordinate.latitude
+        let minimumLongitude = longitudeValues.min() ?? firstCoordinate.longitude
+        let maximumLongitude = longitudeValues.max() ?? firstCoordinate.longitude
+        let center = CLLocationCoordinate2D(
+            latitude: (minimumLatitude + maximumLatitude) / 2,
+            longitude: (minimumLongitude + maximumLongitude) / 2
+        )
+        let latitudeDelta = max((maximumLatitude - minimumLatitude) * 1.4, 0.005)
+        let longitudeDelta = max((maximumLongitude - minimumLongitude) * 1.4, 0.005)
+
+        cameraPosition = .region(
+            MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(
+                    latitudeDelta: latitudeDelta,
+                    longitudeDelta: longitudeDelta
+                )
+            )
+        )
     }
 }
 
@@ -459,16 +629,18 @@ private final class RouteHistoryStore {
     func loadPoints(from startDate: Date, to endDate: Date) -> [RoutePoint] {
         let sql = """
             SELECT
-                id,
-                latitude,
-                longitude,
-                timestamp,
-                horizontal_accuracy,
-                altitude,
-                speed
+                route_points.id,
+                route_points.latitude,
+                route_points.longitude,
+                route_points.timestamp,
+                route_points.horizontal_accuracy,
+                route_points.altitude,
+                route_points.speed
             FROM route_points
-            WHERE timestamp >= ? AND timestamp <= ?
-            ORDER BY timestamp ASC;
+            INNER JOIN route_sessions ON route_sessions.id = route_points.session_id
+            WHERE route_points.timestamp >= ? AND route_points.timestamp <= ?
+                AND route_sessions.ended_at IS NOT NULL
+            ORDER BY route_points.timestamp ASC;
             """
         var points: [RoutePoint] = []
 
