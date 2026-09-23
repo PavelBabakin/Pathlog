@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first five implementation phases completed:
+The project currently has the first six implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -13,6 +13,7 @@ The project currently has the first five implementation phases completed:
 - the app draws the recorded route as a line on the map;
 - the app applies conservative filtering to remove only clearly low-quality location points;
 - the app persists route sessions locally in SQLite;
+- the app can show completed historical routes as a separate map layer;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -143,7 +144,7 @@ Status:
 
 - completed.
 
-### 6. Persisted Routes Map Layer
+### 6. Persisted Routes Map Layer - Completed
 
 Show previously walked routes on the map as a persistent historical layer without replacing the current-location experience.
 
@@ -158,6 +159,14 @@ Scope:
 - provide a way to hide or show the persisted route layer;
 - keep app launch focused on the user's current location, not on the latest stored route.
 
+Initial implementation:
+
+- completed route sessions are loaded from SQLite as separate historical route segments;
+- historical routes are shown with a subdued gray style;
+- the current live tracking route is shown with a stronger blue style;
+- the user can hide or show the historical route layer from the main map panel;
+- historical loading is limited to recent data and a maximum point count until region-based loading is added.
+
 Done when:
 
 - the map can show already walked routes from local storage;
@@ -165,6 +174,10 @@ Done when:
 - historical routes and the current live route remain visually distinguishable, including when they overlap;
 - the app can keep the overlay performant by querying only the needed data;
 - the user can understand the difference between current tracking and previous routes.
+
+Status:
+
+- completed.
 
 ### 7. Basic History View
 
@@ -326,9 +339,9 @@ Done when:
 
 The next milestone is:
 
-> Persisted routes map layer.
+> Basic history view.
 
-This milestone should start using persisted SQLite data in the UI without changing the default launch behavior of showing the user's current location.
+This milestone should let the user inspect stored route history from previous tracking sessions by date.
 
 ## Later Work
 
