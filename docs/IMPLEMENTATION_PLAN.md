@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first ten implementation phases completed:
+The project currently has the first eleven implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -16,6 +16,8 @@ The project currently has the first ten implementation phases completed:
 - the app can show completed historical routes as a separate map layer;
 - the app can load route history for a selected date;
 - the app can play back a selected route with a timeline slider;
+- the app can continue recording the active route while backgrounded when Always location access is enabled;
+- the app communicates whether background tracking is enabled or limited to foreground use;
 - the app can create local map notes with text and photos;
 - the app can attach map notes to nearby places when MapKit returns place data;
 - the project builds successfully.
@@ -326,24 +328,7 @@ Status:
 
 - completed.
 
-### 11. Private Zones
-
-Add areas where route points are not saved.
-
-Scope:
-
-- create a private zone with center, radius, name, and enabled state;
-- detect whether a new location point is inside an active private zone;
-- skip saving points inside active private zones;
-- show private-zone gaps on the route.
-
-Done when:
-
-- points inside a private zone are not stored;
-- route gaps are visible and understandable on the map;
-- the user can enable or disable a private zone.
-
-### 12. Background Tracking
+### 11. Background Tracking - Completed
 
 Allow tracking to continue after the app leaves the foreground.
 
@@ -360,7 +345,19 @@ Done when:
 - the app records useful route points in background conditions;
 - the user can stop tracking after returning to the app.
 
-### 13. Local Tracking Notifications
+Initial implementation:
+
+- the app requests Always location access when the user starts tracking or selects the background access control;
+- the target includes the Location updates background mode and clear permission descriptions;
+- background location updates and the system location indicator are enabled only while tracking with Always access;
+- the tracking screen reports whether background tracking is enabled or foreground-only;
+- denied location access provides a direct route to the app's Settings page.
+
+Status:
+
+- completed.
+
+### 12. Local Tracking Notifications
 
 Add occasional local notifications while tracking is active.
 
@@ -368,7 +365,7 @@ Scope:
 
 - request notification permission;
 - send local reminders that tracking is active;
-- optionally notify when tracking pauses or resumes because of private zones;
+- leave room for later pause and resume notifications once private zones exist;
 - avoid excessive notification frequency.
 
 Done when:
@@ -377,7 +374,7 @@ Done when:
 - notifications are useful and not noisy;
 - notifications do not require a backend.
 
-### 14. Storage and Tracking Impact
+### 13. Storage and Tracking Impact
 
 Show the user how much local data Pathlog stores and provide transparent tracking impact information.
 
@@ -399,13 +396,30 @@ Done when:
 - the user can see recent tracking activity metrics that explain likely battery impact;
 - battery information is presented as an estimate or activity summary, not as exact system battery usage.
 
+### 14. Private Zones
+
+Add areas where route points are not saved.
+
+Scope:
+
+- create a private zone with center, radius, name, and enabled state;
+- detect whether a new location point is inside an active private zone;
+- skip saving points inside active private zones;
+- show private-zone gaps on the route.
+
+Done when:
+
+- points inside a private zone are not stored;
+- route gaps are visible and understandable on the map;
+- the user can enable or disable a private zone.
+
 ## Near-Term Milestone
 
 The next milestone is:
 
-> Private zones.
+> Local tracking notifications.
 
-This milestone should let the user define areas where route points are intentionally not saved.
+This milestone should provide occasional local reminders while tracking is active.
 
 ## Later Work
 
