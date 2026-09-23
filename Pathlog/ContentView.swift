@@ -8,6 +8,7 @@
 import MapKit
 import CoreLocation
 import Combine
+import PhotosUI
 import SQLite3
 import SwiftUI
 
@@ -16,10 +17,26 @@ private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
     @State private var isHistoryPresented = false
+    @State private var isNoteEditorPresented = false
+    @State private var selectedMapNote: MapNote?
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $locationManager.cameraPosition) {
+                ForEach(locationManager.mapNotes) { note in
+                    Annotation(note.title.isEmpty ? "Note" : note.title, coordinate: note.coordinate) {
+                        Button {
+                            selectedMapNote = note
+                        } label: {
+                            Image(systemName: "note.text")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(7)
+                                .background(.purple, in: Circle())
+                        }
+                    }
+                }
+
                 if locationManager.isHistoricalRoutesVisible {
                     ForEach(locationManager.historicalRouteSegments) { segment in
                         if segment.coordinates.count >= 2 {
@@ -60,6 +77,9 @@ struct ContentView: View {
                 MapUserLocationButton()
                 MapCompass()
                 MapScaleView()
+            }
+            .onMapCameraChange { context in
+                locationManager.updateMapCenter(context.region.center)
             }
             .ignoresSafeArea()
 
@@ -137,6 +157,14 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
 
+            Button {
+                isNoteEditorPresented = true
+            } label: {
+                Label("Add Note", systemImage: "plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
             HStack {
                 Label(
                     locationManager.trackingStateText,
@@ -167,6 +195,14 @@ struct ContentView: View {
         .sheet(isPresented: $isHistoryPresented) {
             HistoryView(locationManager: locationManager)
                 .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $isNoteEditorPresented) {
+            NoteEditorView(locationManager: locationManager)
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(item: $selectedMapNote) { note in
+            MapNoteDetailView(note: note)
+                .presentationDetents([.medium])
         }
     }
 }
@@ -259,6 +295,147 @@ struct HistoryView: View {
     }
 }
 
+struct NoteEditorView: View {
+    @ObservedObject var locationManager: LocationManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var target = MapNoteTarget.mapCenter
+    @State private var title = ""
+    @State private var text = ""
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Position") {
+                    Picker("Position", selection: $target) {
+                        ForEach(MapNoteTarget.allCases) { target in
+                            Text(target.label).tag(target)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(target.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Note") {
+                    TextField("Title", text: $title)
+                    TextField("Description", text: $text, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+
+                Section("Photos") {
+                    PhotosPicker(
+                        selection: $selectedPhotos,
+                        maxSelectionCount: 4,
+                        matching: .images
+                    ) {
+                        Label("Choose Photos", systemImage: "photo")
+                    }
+
+                    if !selectedPhotos.isEmpty {
+                        Text("\(selectedPhotos.count) selected")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("New Note")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task {
+                            await locationManager.createMapNote(
+                                title: title,
+                                text: text,
+                                target: target,
+                                selectedPhotos: selectedPhotos
+                            )
+                            dismiss()
+                        }
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+struct MapNoteDetailView: View {
+    let note: MapNote
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Note") {
+                    if !note.title.isEmpty {
+                        Text(note.title)
+                            .font(.headline)
+                    }
+
+                    if !note.text.isEmpty {
+                        Text(note.text)
+                    }
+                }
+
+                Section("Position") {
+                    LabeledContent("Latitude", value: note.latitude.formatted(.number.precision(.fractionLength(6))))
+                    LabeledContent("Longitude", value: note.longitude.formatted(.number.precision(.fractionLength(6))))
+                    LabeledContent("Created", value: note.createdAt.formatted(date: .abbreviated, time: .shortened))
+                }
+
+                if !note.photoLocalPaths.isEmpty {
+                    Section("Photos") {
+                        LabeledContent("Attached", value: "\(note.photoLocalPaths.count)")
+                    }
+                }
+            }
+            .navigationTitle("Map Note")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum MapNoteTarget: String, CaseIterable, Identifiable {
+    case mapCenter
+    case currentLocation
+
+    var id: String {
+        rawValue
+    }
+
+    var label: String {
+        switch self {
+        case .mapCenter:
+            "Map Center"
+        case .currentLocation:
+            "Current Location"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .mapCenter:
+            "Move the map so the place is centered, then save the note."
+        case .currentLocation:
+            "Save the note at your latest known location."
+        }
+    }
+}
+
 struct RoutePoint: Identifiable {
     let id: UUID
     let latitude: Double
@@ -292,6 +469,20 @@ struct RouteSession: Identifiable {
 struct HistoricalRouteSegment: Identifiable {
     let id: UUID
     let coordinates: [CLLocationCoordinate2D]
+}
+
+struct MapNote: Identifiable {
+    let id: UUID
+    let latitude: Double
+    let longitude: Double
+    let title: String
+    let text: String
+    let photoLocalPaths: [String]
+    let createdAt: Date
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
 }
 
 struct ActiveDaySummary: Identifiable {
@@ -331,6 +522,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published private(set) var selectedHistoryRoutePoints: [RoutePoint] = []
     @Published private(set) var selectedHistorySummary: HistoryRouteSummary?
     @Published private(set) var activeDaySummaries: [ActiveDaySummary] = []
+    @Published private(set) var mapNotes: [MapNote] = []
 
     var routeCoordinates: [CLLocationCoordinate2D] {
         routePoints.map(\.coordinate)
@@ -407,6 +599,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private let manager = CLLocationManager()
     private let locationFilter = TrackingLocationFilter()
     private let routeHistoryStore = RouteHistoryStore()
+    private var latestKnownCoordinate: CLLocationCoordinate2D?
+    private var mapCenterCoordinate: CLLocationCoordinate2D?
     private var activeSessionID: UUID?
     private var activeSessionStartedAt: Date?
 
@@ -416,6 +610,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         manager.desiredAccuracy = kCLLocationAccuracyBest
         reloadHistoricalRouteSegments()
         reloadActiveDaySummaries()
+        reloadMapNotes()
     }
 
     func requestLocationAccess() {
@@ -449,6 +644,38 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     func toggleHistoricalRoutesVisibility() {
         isHistoricalRoutesVisible.toggle()
+    }
+
+    func updateMapCenter(_ coordinate: CLLocationCoordinate2D) {
+        mapCenterCoordinate = coordinate
+    }
+
+    @MainActor
+    func createMapNote(
+        title: String,
+        text: String,
+        target: MapNoteTarget,
+        selectedPhotos: [PhotosPickerItem]
+    ) async {
+        guard let coordinate = noteCoordinate(for: target) else {
+            statusMessage = "Could not create note because the selected position is unavailable."
+            return
+        }
+
+        let photoPaths = await routeHistoryStore.saveNotePhotos(selectedPhotos)
+        let note = MapNote(
+            id: UUID(),
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            photoLocalPaths: photoPaths,
+            createdAt: Date()
+        )
+
+        routeHistoryStore.createMapNote(note)
+        reloadMapNotes()
+        statusMessage = "Saved map note."
     }
 
     func loadHistoryForSelectedDate() {
@@ -513,6 +740,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
+        latestKnownCoordinate = location.coordinate
 
         updateStatusAfterLocationUpdate()
 
@@ -560,6 +788,19 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func reloadActiveDaySummaries() {
         activeDaySummaries = routeHistoryStore.loadActiveDaySummaries()
+    }
+
+    private func reloadMapNotes() {
+        mapNotes = routeHistoryStore.loadMapNotes()
+    }
+
+    private func noteCoordinate(for target: MapNoteTarget) -> CLLocationCoordinate2D? {
+        switch target {
+        case .mapCenter:
+            mapCenterCoordinate ?? latestKnownCoordinate
+        case .currentLocation:
+            latestKnownCoordinate
+        }
     }
 
     private func focusCamera(on points: [RoutePoint]) {
@@ -855,6 +1096,90 @@ private final class RouteHistoryStore {
         return summaries
     }
 
+    func createMapNote(_ note: MapNote) {
+        let sql = """
+            INSERT INTO map_notes (
+                id,
+                latitude,
+                longitude,
+                title,
+                text,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?);
+            """
+
+        withPreparedStatement(sql) { statement in
+            bind(note.id.uuidString, to: statement, at: 1)
+            bind(note.latitude, to: statement, at: 2)
+            bind(note.longitude, to: statement, at: 3)
+            bind(note.title, to: statement, at: 4)
+            bind(note.text, to: statement, at: 5)
+            bind(note.createdAt.timeIntervalSince1970, to: statement, at: 6)
+            step(statement)
+        }
+
+        for path in note.photoLocalPaths {
+            createMapNotePhoto(noteID: note.id, localPath: path)
+        }
+    }
+
+    func loadMapNotes() -> [MapNote] {
+        let sql = """
+            SELECT
+                id,
+                latitude,
+                longitude,
+                title,
+                text,
+                created_at
+            FROM map_notes
+            ORDER BY created_at DESC;
+            """
+        var notes: [MapNote] = []
+
+        withPreparedStatement(sql) { statement in
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let id = stringValue(from: statement, at: 0).flatMap(UUID.init(uuidString:)) else {
+                    continue
+                }
+
+                notes.append(
+                    MapNote(
+                        id: id,
+                        latitude: sqlite3_column_double(statement, 1),
+                        longitude: sqlite3_column_double(statement, 2),
+                        title: stringValue(from: statement, at: 3) ?? "",
+                        text: stringValue(from: statement, at: 4) ?? "",
+                        photoLocalPaths: loadPhotoPaths(for: id),
+                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5))
+                    )
+                )
+            }
+        }
+
+        return notes
+    }
+
+    func saveNotePhotos(_ selectedPhotos: [PhotosPickerItem]) async -> [String] {
+        var paths: [String] = []
+
+        for selectedPhoto in selectedPhotos {
+            guard let data = try? await selectedPhoto.loadTransferable(type: Data.self) else {
+                continue
+            }
+
+            do {
+                let photoURL = try writeNotePhotoData(data)
+                paths.append(photoURL.path)
+            } catch {
+                assertionFailure("Failed to save note photo: \(error.localizedDescription)")
+            }
+        }
+
+        return paths
+    }
+
     private func openDatabase() {
         do {
             let databaseURL = routeHistoryDatabaseURL()
@@ -902,6 +1227,31 @@ private final class RouteHistoryStore {
         execute("""
             CREATE INDEX IF NOT EXISTS idx_route_points_timestamp
             ON route_points(timestamp);
+            """)
+
+        execute("""
+            CREATE TABLE IF NOT EXISTS map_notes (
+                id TEXT PRIMARY KEY NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                title TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            """)
+
+        execute("""
+            CREATE TABLE IF NOT EXISTS map_note_photos (
+                id TEXT PRIMARY KEY NOT NULL,
+                note_id TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                FOREIGN KEY(note_id) REFERENCES map_notes(id) ON DELETE CASCADE
+            );
+            """)
+
+        execute("""
+            CREATE INDEX IF NOT EXISTS idx_map_notes_created_at
+            ON map_notes(created_at);
             """)
     }
 
@@ -954,6 +1304,58 @@ private final class RouteHistoryStore {
         return String(cString: text)
     }
 
+    private func createMapNotePhoto(noteID: UUID, localPath: String) {
+        let sql = """
+            INSERT INTO map_note_photos (id, note_id, local_path)
+            VALUES (?, ?, ?);
+            """
+
+        withPreparedStatement(sql) { statement in
+            bind(UUID().uuidString, to: statement, at: 1)
+            bind(noteID.uuidString, to: statement, at: 2)
+            bind(localPath, to: statement, at: 3)
+            step(statement)
+        }
+    }
+
+    private func loadPhotoPaths(for noteID: UUID) -> [String] {
+        let sql = """
+            SELECT local_path
+            FROM map_note_photos
+            WHERE note_id = ?
+            ORDER BY local_path ASC;
+            """
+        var paths: [String] = []
+
+        withPreparedStatement(sql) { statement in
+            bind(noteID.uuidString, to: statement, at: 1)
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let path = stringValue(from: statement, at: 0) {
+                    paths.append(path)
+                }
+            }
+        }
+
+        return paths
+    }
+
+    private func writeNotePhotoData(_ data: Data) throws -> URL {
+        let directoryURL = applicationSupportPathlogURL()
+            .appendingPathComponent("NotePhotos", isDirectory: true)
+        try fileManager.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+
+        let fileURL = directoryURL
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("jpg")
+        try data.write(to: fileURL, options: [.atomic])
+
+        return fileURL
+    }
+
     private var lastDatabaseErrorMessage: String {
         guard let errorPointer = sqlite3_errmsg(database) else {
             return "Unknown SQLite error."
@@ -963,6 +1365,11 @@ private final class RouteHistoryStore {
     }
 
     private func routeHistoryDatabaseURL() -> URL {
+        applicationSupportPathlogURL()
+            .appendingPathComponent("pathlog.sqlite")
+    }
+
+    private func applicationSupportPathlogURL() -> URL {
         let applicationSupportURL = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -970,7 +1377,6 @@ private final class RouteHistoryStore {
 
         return applicationSupportURL
             .appendingPathComponent("Pathlog", isDirectory: true)
-            .appendingPathComponent("pathlog.sqlite")
     }
 }
 
