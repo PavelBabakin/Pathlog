@@ -24,7 +24,7 @@ struct ContentView: View {
         ZStack(alignment: .bottom) {
             Map(position: $locationManager.cameraPosition) {
                 ForEach(locationManager.mapNotes) { note in
-                    Annotation(note.title.isEmpty ? "Note" : note.title, coordinate: note.coordinate) {
+                    Annotation(note.displayTitle, coordinate: note.coordinate) {
                         Button {
                             selectedMapNote = note
                         } label: {
@@ -299,6 +299,7 @@ struct NoteEditorView: View {
     @ObservedObject var locationManager: LocationManager
     @Environment(\.dismiss) private var dismiss
     @State private var target = MapNoteTarget.mapCenter
+    @State private var selectedPlace: MapPlaceCandidate?
     @State private var title = ""
     @State private var text = ""
     @State private var selectedPhotos: [PhotosPickerItem] = []
@@ -317,6 +318,55 @@ struct NoteEditorView: View {
                     Text(target.description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Nearby Places") {
+                    Button {
+                        Task {
+                            await locationManager.searchNearbyPlaces()
+                        }
+                    } label: {
+                        Label("Find Nearby Places", systemImage: "mappin.and.ellipse")
+                    }
+
+                    if locationManager.isSearchingNearbyPlaces {
+                        ProgressView("Searching...")
+                    } else if locationManager.nearbyPlaceCandidates.isEmpty {
+                        Text("Move the map to a place, then search nearby places.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(locationManager.nearbyPlaceCandidates) { place in
+                            Button {
+                                selectedPlace = place
+                                target = .selectedPlace
+                                if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    title = place.name
+                                }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(place.name)
+                                            .font(.subheadline.weight(.medium))
+
+                                        Spacer()
+
+                                        if selectedPlace?.id == place.id {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundStyle(.blue)
+                                        }
+                                    }
+
+                                    if let subtitle = place.subtitle {
+                                        Text(subtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
 
                 Section("Note") {
@@ -355,6 +405,7 @@ struct NoteEditorView: View {
                                 title: title,
                                 text: text,
                                 target: target,
+                                selectedPlace: selectedPlace,
                                 selectedPhotos: selectedPhotos
                             )
                             dismiss()
@@ -386,6 +437,14 @@ struct MapNoteDetailView: View {
                 }
 
                 Section("Position") {
+                    if let placeName = note.placeName {
+                        LabeledContent("Place", value: placeName)
+                    }
+
+                    if let placeCategory = note.placeCategory {
+                        LabeledContent("Category", value: placeCategory)
+                    }
+
                     LabeledContent("Latitude", value: note.latitude.formatted(.number.precision(.fractionLength(6))))
                     LabeledContent("Longitude", value: note.longitude.formatted(.number.precision(.fractionLength(6))))
                     LabeledContent("Created", value: note.createdAt.formatted(date: .abbreviated, time: .shortened))
@@ -412,6 +471,7 @@ struct MapNoteDetailView: View {
 enum MapNoteTarget: String, CaseIterable, Identifiable {
     case mapCenter
     case currentLocation
+    case selectedPlace
 
     var id: String {
         rawValue
@@ -423,6 +483,8 @@ enum MapNoteTarget: String, CaseIterable, Identifiable {
             "Map Center"
         case .currentLocation:
             "Current Location"
+        case .selectedPlace:
+            "Place"
         }
     }
 
@@ -432,8 +494,29 @@ enum MapNoteTarget: String, CaseIterable, Identifiable {
             "Move the map so the place is centered, then save the note."
         case .currentLocation:
             "Save the note at your latest known location."
+        case .selectedPlace:
+            "Save the note on the selected nearby place."
         }
     }
+}
+
+struct MapPlaceCandidate: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let subtitle: String?
+    let category: String?
+    let latitude: Double
+    let longitude: Double
+    let identifier: String?
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+private struct MapNoteResolvedTarget {
+    let coordinate: CLLocationCoordinate2D
+    let place: MapPlaceCandidate?
 }
 
 struct RoutePoint: Identifiable {
@@ -477,11 +560,22 @@ struct MapNote: Identifiable {
     let longitude: Double
     let title: String
     let text: String
+    let placeName: String?
+    let placeCategory: String?
+    let placeIdentifier: String?
     let photoLocalPaths: [String]
     let createdAt: Date
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var displayTitle: String {
+        if !title.isEmpty {
+            return title
+        }
+
+        return placeName ?? "Note"
     }
 }
 
@@ -523,6 +617,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published private(set) var selectedHistorySummary: HistoryRouteSummary?
     @Published private(set) var activeDaySummaries: [ActiveDaySummary] = []
     @Published private(set) var mapNotes: [MapNote] = []
+    @Published private(set) var nearbyPlaceCandidates: [MapPlaceCandidate] = []
+    @Published private(set) var isSearchingNearbyPlaces = false
 
     var routeCoordinates: [CLLocationCoordinate2D] {
         routePoints.map(\.coordinate)
@@ -655,9 +751,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         title: String,
         text: String,
         target: MapNoteTarget,
+        selectedPlace: MapPlaceCandidate?,
         selectedPhotos: [PhotosPickerItem]
     ) async {
-        guard let coordinate = noteCoordinate(for: target) else {
+        guard let noteTarget = noteTarget(for: target, selectedPlace: selectedPlace) else {
             statusMessage = "Could not create note because the selected position is unavailable."
             return
         }
@@ -665,10 +762,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         let photoPaths = await routeHistoryStore.saveNotePhotos(selectedPhotos)
         let note = MapNote(
             id: UUID(),
-            latitude: coordinate.latitude,
-            longitude: coordinate.longitude,
+            latitude: noteTarget.coordinate.latitude,
+            longitude: noteTarget.coordinate.longitude,
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            placeName: noteTarget.place?.name,
+            placeCategory: noteTarget.place?.category,
+            placeIdentifier: noteTarget.place?.identifier,
             photoLocalPaths: photoPaths,
             createdAt: Date()
         )
@@ -676,6 +776,46 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         routeHistoryStore.createMapNote(note)
         reloadMapNotes()
         statusMessage = "Saved map note."
+    }
+
+    @MainActor
+    func searchNearbyPlaces() async {
+        guard let center = mapCenterCoordinate ?? latestKnownCoordinate else {
+            statusMessage = "Move the map to the place you want to search."
+            return
+        }
+
+        isSearchingNearbyPlaces = true
+        defer {
+            isSearchingNearbyPlaces = false
+        }
+
+        let request = MKLocalPointsOfInterestRequest(center: center, radius: 250)
+        request.pointOfInterestFilter = .includingAll
+
+        do {
+            let response = try await MKLocalSearch(request: request).start()
+            nearbyPlaceCandidates = response.mapItems
+                .filter { CLLocationCoordinate2DIsValid($0.location.coordinate) }
+                .prefix(12)
+                .enumerated()
+                .map { index, mapItem in
+                    let coordinate = mapItem.location.coordinate
+
+                    return MapPlaceCandidate(
+                        id: mapItem.identifier?.rawValue ?? "\(mapItem.name ?? "Place")-\(index)-\(coordinate.latitude)-\(coordinate.longitude)",
+                        name: mapItem.name ?? "Unnamed Place",
+                        subtitle: mapItem.address?.shortAddress,
+                        category: mapItem.pointOfInterestCategory?.rawValue,
+                        latitude: coordinate.latitude,
+                        longitude: coordinate.longitude,
+                        identifier: mapItem.identifier?.rawValue
+                    )
+                }
+            statusMessage = nearbyPlaceCandidates.isEmpty ? "No nearby places found." : "Found \(nearbyPlaceCandidates.count) nearby places."
+        } catch {
+            statusMessage = "Could not search nearby places: \(error.localizedDescription)"
+        }
     }
 
     func loadHistoryForSelectedDate() {
@@ -794,12 +934,22 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         mapNotes = routeHistoryStore.loadMapNotes()
     }
 
-    private func noteCoordinate(for target: MapNoteTarget) -> CLLocationCoordinate2D? {
+    private func noteTarget(for target: MapNoteTarget, selectedPlace: MapPlaceCandidate?) -> MapNoteResolvedTarget? {
         switch target {
         case .mapCenter:
-            mapCenterCoordinate ?? latestKnownCoordinate
+            return (mapCenterCoordinate ?? latestKnownCoordinate).map {
+                MapNoteResolvedTarget(coordinate: $0, place: nil)
+            }
         case .currentLocation:
-            latestKnownCoordinate
+            return latestKnownCoordinate.map {
+                MapNoteResolvedTarget(coordinate: $0, place: nil)
+            }
+        case .selectedPlace:
+            guard let selectedPlace else {
+                return nil
+            }
+
+            return MapNoteResolvedTarget(coordinate: selectedPlace.coordinate, place: selectedPlace)
         }
     }
 
@@ -1104,9 +1254,12 @@ private final class RouteHistoryStore {
                 longitude,
                 title,
                 text,
+                place_name,
+                place_category,
+                place_identifier,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
 
         withPreparedStatement(sql) { statement in
@@ -1115,7 +1268,10 @@ private final class RouteHistoryStore {
             bind(note.longitude, to: statement, at: 3)
             bind(note.title, to: statement, at: 4)
             bind(note.text, to: statement, at: 5)
-            bind(note.createdAt.timeIntervalSince1970, to: statement, at: 6)
+            bind(note.placeName, to: statement, at: 6)
+            bind(note.placeCategory, to: statement, at: 7)
+            bind(note.placeIdentifier, to: statement, at: 8)
+            bind(note.createdAt.timeIntervalSince1970, to: statement, at: 9)
             step(statement)
         }
 
@@ -1132,6 +1288,9 @@ private final class RouteHistoryStore {
                 longitude,
                 title,
                 text,
+                place_name,
+                place_category,
+                place_identifier,
                 created_at
             FROM map_notes
             ORDER BY created_at DESC;
@@ -1151,8 +1310,11 @@ private final class RouteHistoryStore {
                         longitude: sqlite3_column_double(statement, 2),
                         title: stringValue(from: statement, at: 3) ?? "",
                         text: stringValue(from: statement, at: 4) ?? "",
+                        placeName: stringValue(from: statement, at: 5),
+                        placeCategory: stringValue(from: statement, at: 6),
+                        placeIdentifier: stringValue(from: statement, at: 7),
                         photoLocalPaths: loadPhotoPaths(for: id),
-                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5))
+                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 8))
                     )
                 )
             }
@@ -1236,9 +1398,28 @@ private final class RouteHistoryStore {
                 longitude REAL NOT NULL,
                 title TEXT NOT NULL,
                 text TEXT NOT NULL,
+                place_name TEXT,
+                place_category TEXT,
+                place_identifier TEXT,
                 created_at REAL NOT NULL
             );
             """)
+
+        addColumnIfNeeded(
+            table: "map_notes",
+            column: "place_name",
+            definition: "TEXT"
+        )
+        addColumnIfNeeded(
+            table: "map_notes",
+            column: "place_category",
+            definition: "TEXT"
+        )
+        addColumnIfNeeded(
+            table: "map_notes",
+            column: "place_identifier",
+            definition: "TEXT"
+        )
 
         execute("""
             CREATE TABLE IF NOT EXISTS map_note_photos (
@@ -1281,6 +1462,14 @@ private final class RouteHistoryStore {
         sqlite3_bind_text(statement, index, value, -1, sqliteTransient)
     }
 
+    private func bind(_ value: String?, to statement: OpaquePointer?, at index: Int32) {
+        if let value {
+            sqlite3_bind_text(statement, index, value, -1, sqliteTransient)
+        } else {
+            sqlite3_bind_null(statement, index)
+        }
+    }
+
     private func bind(_ value: Double, to statement: OpaquePointer?, at index: Int32) {
         sqlite3_bind_double(statement, index, value)
     }
@@ -1302,6 +1491,29 @@ private final class RouteHistoryStore {
         }
 
         return String(cString: text)
+    }
+
+    private func addColumnIfNeeded(table: String, column: String, definition: String) {
+        guard !tableColumnNames(table: table).contains(column) else {
+            return
+        }
+
+        execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition);")
+    }
+
+    private func tableColumnNames(table: String) -> Set<String> {
+        let sql = "PRAGMA table_info(\(table));"
+        var names = Set<String>()
+
+        withPreparedStatement(sql) { statement in
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let name = stringValue(from: statement, at: 1) {
+                    names.insert(name)
+                }
+            }
+        }
+
+        return names
     }
 
     private func createMapNotePhoto(noteID: UUID, localPath: String) {
