@@ -11,11 +11,13 @@ import Combine
 import PhotosUI
 import SQLite3
 import SwiftUI
+import UIKit
 
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
+    @Environment(\.openURL) private var openURL
     @State private var isHistoryPresented = false
     @State private var isNoteEditorPresented = false
     @State private var selectedMapNote: MapNote?
@@ -90,6 +92,14 @@ struct ContentView: View {
         }
     }
 
+    private func openAppSettings() {
+        guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
+            return
+        }
+
+        openURL(settingsURL)
+    }
+
     private var statusPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pathlog")
@@ -101,12 +111,36 @@ struct ContentView: View {
 
             if locationManager.shouldShowPermissionButton {
                 Button {
-                    locationManager.requestLocationAccess()
+                    if locationManager.shouldOpenLocationSettings {
+                        openAppSettings()
+                    } else {
+                        locationManager.requestLocationAccess()
+                    }
                 } label: {
-                    Label("Allow Location Access", systemImage: "location.fill")
+                    Label(
+                        locationManager.shouldOpenLocationSettings ? "Open Settings" : "Allow Location Access",
+                        systemImage: locationManager.shouldOpenLocationSettings ? "gearshape" : "location.fill"
+                    )
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+            }
+
+            if locationManager.shouldShowBackgroundPermissionButton {
+                Button {
+                    if locationManager.shouldOpenBackgroundSettings {
+                        openAppSettings()
+                    } else {
+                        locationManager.requestBackgroundLocationAccess()
+                    }
+                } label: {
+                    Label(
+                        locationManager.shouldOpenBackgroundSettings ? "Open Settings" : "Allow Background Tracking",
+                        systemImage: locationManager.shouldOpenBackgroundSettings ? "gearshape" : "location.circle.fill"
+                    )
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
 
             Divider()
@@ -175,6 +209,12 @@ struct ContentView: View {
                 Spacer()
 
                 Text("\(locationManager.collectedPointCount) points")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if locationManager.isTracking {
+                Label(locationManager.backgroundTrackingStatusText, systemImage: "iphone.radiowaves.left.and.right")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -606,6 +646,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var cameraPosition: MapCameraPosition = .automatic
     @Published var statusMessage = "Requesting your location..."
     @Published var shouldShowPermissionButton = false
+    @Published var shouldShowBackgroundPermissionButton = false
+    @Published var shouldOpenBackgroundSettings = false
     @Published var isTracking = false
     @Published var isHistoricalRoutesVisible = true
     @Published var selectedHistoryDate = Date()
@@ -680,6 +722,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         }
     }
 
+    var shouldOpenLocationSettings: Bool {
+        manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted
+    }
+
     var trackingStateText: String {
         isTracking ? "Tracking active" : "Tracking stopped"
     }
@@ -690,6 +736,19 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     var trackingButtonIcon: String {
         isTracking ? "stop.fill" : "play.fill"
+    }
+
+    var backgroundTrackingStatusText: String {
+        switch manager.authorizationStatus {
+        case .authorizedAlways:
+            "Background tracking enabled"
+        case .authorizedWhenInUse:
+            "Tracking works while Pathlog is open"
+        case .denied, .notDetermined, .restricted:
+            "Background tracking unavailable"
+        @unknown default:
+            "Background tracking status unknown"
+        }
     }
 
     private let manager = CLLocationManager()
@@ -704,6 +763,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.activityType = .fitness
         reloadHistoricalRouteSegments()
         reloadActiveDaySummaries()
         reloadMapNotes()
@@ -713,13 +773,40 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         switch manager.authorizationStatus {
         case .notDetermined:
             manager.requestWhenInUseAuthorization()
-        case .authorizedWhenInUse, .authorizedAlways:
+        case .authorizedWhenInUse:
             shouldShowPermissionButton = false
+            shouldShowBackgroundPermissionButton = true
+            statusMessage = "Showing your current location. Allow background tracking to keep recording after leaving the app."
+            manager.startUpdatingLocation()
+        case .authorizedAlways:
+            shouldShowPermissionButton = false
+            shouldShowBackgroundPermissionButton = false
             statusMessage = "Showing your current location."
             manager.startUpdatingLocation()
         case .denied, .restricted:
             shouldShowPermissionButton = true
+            shouldShowBackgroundPermissionButton = false
             statusMessage = "Location access is disabled. Enable it in Settings to show your position."
+        @unknown default:
+            statusMessage = "Location status is unknown."
+        }
+    }
+
+    func requestBackgroundLocationAccess() {
+        switch manager.authorizationStatus {
+        case .authorizedWhenInUse:
+            manager.requestAlwaysAuthorization()
+            shouldOpenBackgroundSettings = true
+            statusMessage = "Requesting background tracking access."
+        case .authorizedAlways:
+            shouldShowBackgroundPermissionButton = false
+            shouldOpenBackgroundSettings = false
+            statusMessage = "Background tracking is enabled."
+        case .notDetermined:
+            requestLocationAccess()
+        case .denied, .restricted:
+            shouldShowPermissionButton = true
+            statusMessage = "Location access is disabled. Enable Always access in Settings for background tracking."
         @unknown default:
             statusMessage = "Location status is unknown."
         }
@@ -851,6 +938,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func startTracking() {
+        if manager.authorizationStatus == .authorizedWhenInUse {
+            requestBackgroundLocationAccess()
+        }
+
         let session = RouteSession(id: UUID(), startedAt: Date(), endedAt: nil)
         routeHistoryStore.createSession(session)
         activeSessionID = session.id
@@ -858,11 +949,16 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         routePoints = []
         collectedPointCount = 0
         isTracking = true
-        statusMessage = "Tracking is active."
+        configureBackgroundTracking()
+        manager.startUpdatingLocation()
+        statusMessage = manager.authorizationStatus == .authorizedAlways
+            ? "Tracking is active, including in the background."
+            : "Tracking is active while Pathlog remains open."
     }
 
     private func stopTracking() {
         isTracking = false
+        configureBackgroundTracking()
         if let activeSessionID {
             routeHistoryStore.finishSession(id: activeSessionID, endedAt: Date())
         }
@@ -876,6 +972,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         requestLocationAccess()
+        if manager.authorizationStatus == .authorizedAlways {
+            shouldOpenBackgroundSettings = false
+        }
+        configureBackgroundTracking()
+        if isTracking {
+            updateStatusAfterLocationUpdate()
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -914,12 +1017,21 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func updateStatusAfterLocationUpdate() {
         shouldShowPermissionButton = false
+        shouldShowBackgroundPermissionButton = manager.authorizationStatus == .authorizedWhenInUse
 
         if isTracking {
-            statusMessage = "Tracking is active."
+            statusMessage = manager.authorizationStatus == .authorizedAlways
+                ? "Tracking is active, including in the background."
+                : "Tracking is active while Pathlog remains open."
         } else {
             statusMessage = "Showing your current location."
         }
+    }
+
+    private func configureBackgroundTracking() {
+        manager.pausesLocationUpdatesAutomatically = false
+        manager.allowsBackgroundLocationUpdates = isTracking && manager.authorizationStatus == .authorizedAlways
+        manager.showsBackgroundLocationIndicator = isTracking && manager.authorizationStatus == .authorizedAlways
     }
 
     private func reloadHistoricalRouteSegments() {
