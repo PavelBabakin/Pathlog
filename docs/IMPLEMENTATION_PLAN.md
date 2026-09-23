@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first nine implementation phases completed:
+The project currently has the first ten implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -17,6 +17,7 @@ The project currently has the first nine implementation phases completed:
 - the app can load route history for a selected date;
 - the app can play back a selected route with a timeline slider;
 - the app can create local map notes with text and photos;
+- the app can attach map notes to nearby places when MapKit returns place data;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -294,7 +295,7 @@ Status:
 
 - completed.
 
-### 10. Place-Based Map Notes
+### 10. Place-Based Map Notes - Completed
 
 Allow notes to be attached to selected map objects or points of interest, not only to the user's current position or route point.
 
@@ -312,6 +313,18 @@ Done when:
 - the user can attach a note to that place;
 - the note remains connected to the place when browsing later;
 - the experience still works when a place identifier is unavailable by falling back to coordinates.
+
+Initial implementation:
+
+- the note editor can search nearby points of interest around the current map center;
+- the user can select a nearby place before saving a note;
+- selected place name, category, and identifier are stored when available;
+- notes remain coordinate-based when no place identifier is available;
+- note details show the attached place metadata.
+
+Status:
+
+- completed.
 
 ### 11. Private Zones
 
@@ -390,9 +403,9 @@ Done when:
 
 The next milestone is:
 
-> Place-based map notes.
+> Private zones.
 
-This milestone should let the user attach notes to selected map places or points of interest when place data is available.
+This milestone should let the user define areas where route points are intentionally not saved.
 
 ## Later Work
 
