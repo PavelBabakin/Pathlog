@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first eleven implementation phases completed:
+The project currently has the first twelve implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -18,6 +18,8 @@ The project currently has the first eleven implementation phases completed:
 - the app can play back a selected route with a timeline slider;
 - the app can continue recording the active route while backgrounded when Always location access is enabled;
 - the app communicates whether background tracking is enabled or limited to foreground use;
+- the app can send quiet local reminders while tracking is active;
+- tracking reminders stop when the user stops tracking;
 - the app can create local map notes with text and photos;
 - the app can attach map notes to nearby places when MapKit returns place data;
 - the project builds successfully.
@@ -357,7 +359,7 @@ Status:
 
 - completed.
 
-### 12. Local Tracking Notifications
+### 12. Local Tracking Notifications - Completed
 
 Add occasional local notifications while tracking is active.
 
@@ -373,6 +375,18 @@ Done when:
 - the app can show local tracking reminders;
 - notifications are useful and not noisy;
 - notifications do not require a backend.
+
+Initial implementation:
+
+- the app requests notification permission when tracking starts;
+- a quiet local reminder repeats every two hours while tracking is active;
+- stopping tracking cancels the pending reminder;
+- denied permission does not interrupt route recording and provides a link to notification settings;
+- notification authorization is refreshed when the app returns to the foreground during tracking.
+
+Status:
+
+- completed.
 
 ### 13. Storage and Tracking Impact
 
@@ -417,9 +431,9 @@ Done when:
 
 The next milestone is:
 
-> Local tracking notifications.
+> Storage and tracking impact.
 
-This milestone should provide occasional local reminders while tracking is active.
+This milestone should explain local storage use and the app's tracking activity and likely battery impact.
 
 ## Later Work
 
