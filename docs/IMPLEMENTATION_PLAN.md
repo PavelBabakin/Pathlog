@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first seven implementation phases completed:
+The project currently has the first eight implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -15,6 +15,7 @@ The project currently has the first seven implementation phases completed:
 - the app persists route sessions locally in SQLite;
 - the app can show completed historical routes as a separate map layer;
 - the app can load route history for a selected date;
+- the app can play back a selected route with a timeline slider;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -209,7 +210,7 @@ Status:
 
 - completed.
 
-### 8. Timeline Playback
+### 8. Timeline Playback - Completed
 
 Add route playback with a calendar and timeline controls.
 
@@ -227,15 +228,34 @@ Scope:
 - visually fill the route as playback progresses;
 - keep private-zone gaps understandable once private zones exist.
 
+Initial implementation:
+
+- the History sheet shows recent active days with recorded point counts;
+- selecting an active day loads that day's route from SQLite;
+- the selected route is shown as a faint full-route preview;
+- a playback slider scrubs through the selected route;
+- the map shows a moving playback marker at the selected point;
+- the played portion of the route is filled with a stronger orange line;
+- the playback control shows the selected point's timestamp.
+
 Done when:
 
 - the user can choose a recorded day from a calendar;
 - the user can visually distinguish days with activity from empty days;
-- the user can switch to a calendar mode focused on active days;
-- the user can select a single day or a date range;
-- the user can optionally narrow the result to a time range;
 - the user can scrub through the selected route like a video timeline;
 - the map updates to show the route state at the selected moment.
+
+Deferred timeline scope:
+
+- active-days-only calendar mode;
+- selecting a date range;
+- narrowing a selection to a time range;
+- playback behavior across multiple days;
+- private-zone gap visualization in playback.
+
+Status:
+
+- completed.
 
 ### 9. Map Notes
 
@@ -353,9 +373,9 @@ Done when:
 
 The next milestone is:
 
-> Timeline playback.
+> Map notes.
 
-This milestone should add calendar-based browsing, active-day highlighting, date ranges, and playback controls.
+This milestone should let the user add text and photo notes at the current position or while browsing history.
 
 ## Later Work
 

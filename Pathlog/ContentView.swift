@@ -31,7 +31,22 @@ struct ContentView: View {
 
                 if locationManager.selectedHistoryRouteCoordinates.count >= 2 {
                     MapPolyline(coordinates: locationManager.selectedHistoryRouteCoordinates)
+                        .stroke(.orange.opacity(0.25), lineWidth: 5)
+                }
+
+                if locationManager.playbackRouteCoordinates.count >= 2 {
+                    MapPolyline(coordinates: locationManager.playbackRouteCoordinates)
                         .stroke(.orange, lineWidth: 6)
+                }
+
+                if let playbackCoordinate = locationManager.playbackCoordinate {
+                    Annotation("Playback", coordinate: playbackCoordinate) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.orange)
+                            .padding(5)
+                            .background(.regularMaterial, in: Circle())
+                    }
                 }
 
                 if locationManager.routeCoordinates.count >= 2 {
@@ -163,6 +178,27 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Recorded Days") {
+                    if locationManager.activeDaySummaries.isEmpty {
+                        Text("No recorded days yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(locationManager.activeDaySummaries.prefix(8)) { summary in
+                            Button {
+                                locationManager.selectedHistoryDate = summary.date
+                                locationManager.loadHistoryForSelectedDate()
+                            } label: {
+                                HStack {
+                                    Text(summary.date, style: .date)
+                                    Spacer()
+                                    Text("\(summary.pointCount) points")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Section("Date") {
                     DatePicker(
                         "Route date",
@@ -182,6 +218,20 @@ struct HistoryView: View {
                     if let selectedHistorySummary = locationManager.selectedHistorySummary {
                         LabeledContent("Points", value: "\(selectedHistorySummary.pointCount)")
                         LabeledContent("Time", value: selectedHistorySummary.timeRangeText)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Label("Playback", systemImage: "play.circle")
+                                Spacer()
+                                Text(locationManager.playbackTimestampText)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Slider(
+                                value: $locationManager.playbackProgress,
+                                in: 0...1
+                            )
+                        }
 
                         Button(role: .destructive) {
                             locationManager.clearSelectedHistoryRoute()
@@ -244,6 +294,15 @@ struct HistoricalRouteSegment: Identifiable {
     let coordinates: [CLLocationCoordinate2D]
 }
 
+struct ActiveDaySummary: Identifiable {
+    let date: Date
+    let pointCount: Int
+
+    var id: Date {
+        date
+    }
+}
+
 struct HistoryRouteSummary {
     let pointCount: Int
     let startDate: Date
@@ -265,11 +324,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var isTracking = false
     @Published var isHistoricalRoutesVisible = true
     @Published var selectedHistoryDate = Date()
+    @Published var playbackProgress = 1.0
     @Published var collectedPointCount = 0
     @Published private(set) var routePoints: [RoutePoint] = []
     @Published private(set) var historicalRouteSegments: [HistoricalRouteSegment] = []
     @Published private(set) var selectedHistoryRoutePoints: [RoutePoint] = []
     @Published private(set) var selectedHistorySummary: HistoryRouteSummary?
+    @Published private(set) var activeDaySummaries: [ActiveDaySummary] = []
 
     var routeCoordinates: [CLLocationCoordinate2D] {
         routePoints.map(\.coordinate)
@@ -277,6 +338,43 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     var selectedHistoryRouteCoordinates: [CLLocationCoordinate2D] {
         selectedHistoryRoutePoints.map(\.coordinate)
+    }
+
+    var playbackPointIndex: Int? {
+        guard !selectedHistoryRoutePoints.isEmpty else {
+            return nil
+        }
+
+        let lastIndex = selectedHistoryRoutePoints.count - 1
+        return min(max(Int((Double(lastIndex) * playbackProgress).rounded()), 0), lastIndex)
+    }
+
+    var playbackRouteCoordinates: [CLLocationCoordinate2D] {
+        guard let playbackPointIndex else {
+            return []
+        }
+
+        return selectedHistoryRoutePoints.prefix(playbackPointIndex + 1).map(\.coordinate)
+    }
+
+    var playbackCoordinate: CLLocationCoordinate2D? {
+        guard let playbackPointIndex else {
+            return nil
+        }
+
+        return selectedHistoryRoutePoints[playbackPointIndex].coordinate
+    }
+
+    var playbackTimestampText: String {
+        guard let playbackPointIndex else {
+            return "--"
+        }
+
+        let formatter = DateFormatter()
+        formatter.timeStyle = .medium
+        formatter.dateStyle = .none
+
+        return formatter.string(from: selectedHistoryRoutePoints[playbackPointIndex].timestamp)
     }
 
     var historicalRouteCount: Int {
@@ -317,6 +415,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
         reloadHistoricalRouteSegments()
+        reloadActiveDaySummaries()
     }
 
     func requestLocationAccess() {
@@ -362,6 +461,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
         let points = routeHistoryStore.loadPoints(from: startOfDay, to: endOfDay)
         selectedHistoryRoutePoints = points
+        playbackProgress = 1
 
         if let firstPoint = points.first, let lastPoint = points.last {
             selectedHistorySummary = HistoryRouteSummary(
@@ -380,6 +480,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     func clearSelectedHistoryRoute() {
         selectedHistoryRoutePoints = []
         selectedHistorySummary = nil
+        playbackProgress = 1
     }
 
     private func startTracking() {
@@ -401,6 +502,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         activeSessionID = nil
         activeSessionStartedAt = nil
         reloadHistoricalRouteSegments()
+        reloadActiveDaySummaries()
         routePoints = []
         statusMessage = "Tracking stopped with \(collectedPointCount) points."
     }
@@ -454,6 +556,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func reloadHistoricalRouteSegments() {
         historicalRouteSegments = routeHistoryStore.loadHistoricalRouteSegments()
+    }
+
+    private func reloadActiveDaySummaries() {
+        activeDaySummaries = routeHistoryStore.loadActiveDaySummaries()
     }
 
     private func focusCamera(on points: [RoutePoint]) {
@@ -719,6 +825,34 @@ private final class RouteHistoryStore {
         return segments
             .filter { $0.coordinates.count >= 2 }
             .map { HistoricalRouteSegment(id: $0.id, coordinates: $0.coordinates) }
+    }
+
+    func loadActiveDaySummaries() -> [ActiveDaySummary] {
+        let sql = """
+            SELECT
+                CAST(strftime('%s', date(route_points.timestamp, 'unixepoch', 'localtime')) AS REAL),
+                COUNT(route_points.id)
+            FROM route_points
+            INNER JOIN route_sessions ON route_sessions.id = route_points.session_id
+            WHERE route_sessions.ended_at IS NOT NULL
+            GROUP BY date(route_points.timestamp, 'unixepoch', 'localtime')
+            ORDER BY route_points.timestamp DESC
+            LIMIT 30;
+            """
+        var summaries: [ActiveDaySummary] = []
+
+        withPreparedStatement(sql) { statement in
+            while sqlite3_step(statement) == SQLITE_ROW {
+                summaries.append(
+                    ActiveDaySummary(
+                        date: Date(timeIntervalSince1970: sqlite3_column_double(statement, 0)),
+                        pointCount: Int(sqlite3_column_int(statement, 1))
+                    )
+                )
+            }
+        }
+
+        return summaries
     }
 
     private func openDatabase() {
