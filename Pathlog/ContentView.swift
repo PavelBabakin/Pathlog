@@ -18,6 +18,7 @@ private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @State private var isHistoryPresented = false
     @State private var isNoteEditorPresented = false
     @State private var selectedMapNote: MapNote?
@@ -89,6 +90,11 @@ struct ContentView: View {
         }
         .onAppear {
             locationManager.requestLocationAccess()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                locationManager.refreshTrackingReminder()
+            }
         }
     }
 
@@ -217,6 +223,22 @@ struct ContentView: View {
                 Label(locationManager.backgroundTrackingStatusText, systemImage: "iphone.radiowaves.left.and.right")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let reminderStatusMessage = locationManager.reminderStatusMessage {
+                    Label(reminderStatusMessage, systemImage: "bell")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if locationManager.shouldOpenNotificationSettings {
+                    Button {
+                        openAppSettings()
+                    } label: {
+                        Label("Notification Settings", systemImage: "bell.badge")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
 
             Button {
@@ -648,6 +670,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var shouldShowPermissionButton = false
     @Published var shouldShowBackgroundPermissionButton = false
     @Published var shouldOpenBackgroundSettings = false
+    @Published private(set) var reminderStatusMessage: String?
+    @Published private(set) var shouldOpenNotificationSettings = false
     @Published var isTracking = false
     @Published var isHistoricalRoutesVisible = true
     @Published var selectedHistoryDate = Date()
@@ -754,6 +778,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private let manager = CLLocationManager()
     private let locationFilter = TrackingLocationFilter()
     private let routeHistoryStore = RouteHistoryStore()
+    private let trackingNotificationService = TrackingNotificationService()
     private var latestKnownCoordinate: CLLocationCoordinate2D?
     private var mapCenterCoordinate: CLLocationCoordinate2D?
     private var activeSessionID: UUID?
@@ -822,6 +847,35 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             stopTracking()
         } else {
             startTracking()
+        }
+    }
+
+    func refreshTrackingReminder(requestBackgroundAccessAfterSetup: Bool = false) {
+        guard isTracking else { return }
+
+        Task {
+            let result = await trackingNotificationService.scheduleTrackingReminder()
+
+            guard isTracking else {
+                trackingNotificationService.cancelTrackingReminder()
+                return
+            }
+
+            switch result {
+            case .scheduled:
+                reminderStatusMessage = "Tracking reminders are on"
+                shouldOpenNotificationSettings = false
+            case .permissionDenied:
+                reminderStatusMessage = "Tracking reminders are off"
+                shouldOpenNotificationSettings = true
+            case .failed:
+                reminderStatusMessage = "Could not schedule tracking reminders"
+                shouldOpenNotificationSettings = false
+            }
+
+            if requestBackgroundAccessAfterSetup && manager.authorizationStatus == .authorizedWhenInUse {
+                requestBackgroundLocationAccess()
+            }
         }
     }
 
@@ -938,10 +992,6 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func startTracking() {
-        if manager.authorizationStatus == .authorizedWhenInUse {
-            requestBackgroundLocationAccess()
-        }
-
         let session = RouteSession(id: UUID(), startedAt: Date(), endedAt: nil)
         routeHistoryStore.createSession(session)
         activeSessionID = session.id
@@ -951,6 +1001,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         isTracking = true
         configureBackgroundTracking()
         manager.startUpdatingLocation()
+        reminderStatusMessage = "Setting up tracking reminders"
+        shouldOpenNotificationSettings = false
+        refreshTrackingReminder(requestBackgroundAccessAfterSetup: manager.authorizationStatus == .authorizedWhenInUse)
         statusMessage = manager.authorizationStatus == .authorizedAlways
             ? "Tracking is active, including in the background."
             : "Tracking is active while Pathlog remains open."
@@ -959,6 +1012,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private func stopTracking() {
         isTracking = false
         configureBackgroundTracking()
+        trackingNotificationService.cancelTrackingReminder()
+        reminderStatusMessage = nil
+        shouldOpenNotificationSettings = false
         if let activeSessionID {
             routeHistoryStore.finishSession(id: activeSessionID, endedAt: Date())
         }
