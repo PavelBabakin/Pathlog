@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first six implementation phases completed:
+The project currently has the first seven implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -14,6 +14,7 @@ The project currently has the first six implementation phases completed:
 - the app applies conservative filtering to remove only clearly low-quality location points;
 - the app persists route sessions locally in SQLite;
 - the app can show completed historical routes as a separate map layer;
+- the app can load route history for a selected date;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -179,7 +180,7 @@ Status:
 
 - completed.
 
-### 7. Basic History View
+### 7. Basic History View - Completed
 
 Let the user inspect previously recorded history.
 
@@ -190,10 +191,23 @@ Scope:
 - show the route on the map;
 - show basic metadata such as point count and time range.
 
+Initial implementation:
+
+- the main map panel opens a History sheet;
+- the user can select a date with a graphical date picker;
+- completed route points for the selected day are loaded from SQLite;
+- the selected day's route is drawn on the map with a distinct orange style;
+- the map camera focuses on the selected route after loading it;
+- the selected route shows basic metadata: point count and time range.
+
 Done when:
 
 - the user can view a recorded route from a previous session;
 - the route is loaded from local storage, not memory.
+
+Status:
+
+- completed.
 
 ### 8. Timeline Playback
 
@@ -339,9 +353,9 @@ Done when:
 
 The next milestone is:
 
-> Basic history view.
+> Timeline playback.
 
-This milestone should let the user inspect stored route history from previous tracking sessions by date.
+This milestone should add calendar-based browsing, active-day highlighting, date ranges, and playback controls.
 
 ## Later Work
 
