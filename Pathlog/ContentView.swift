@@ -23,44 +23,91 @@ struct ContentView: View {
     @State private var isNoteEditorPresented = false
     @State private var isStorageImpactPresented = false
     @State private var isPrivateZonesPresented = false
+    @State private var selectedMapNoteCoordinate: CLLocationCoordinate2D?
+    @State private var selectedMapNotePoint: CGPoint?
     @State private var selectedMapNote: MapNote?
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Map(position: $locationManager.cameraPosition) {
-                ForEach(locationManager.privateZones) { zone in
-                    MapCircle(center: zone.coordinate, radius: zone.radiusMeters)
-                        .foregroundStyle(zone.isEnabled ? Color.red.opacity(0.12) : Color.gray.opacity(0.04))
-                        .stroke(zone.isEnabled ? Color.red.opacity(0.8) : Color.gray.opacity(0.55), lineWidth: 2)
+        ZStack {
+            MapReader { proxy in
+                Map(position: $locationManager.cameraPosition) {
+                    ForEach(locationManager.privateZones) { zone in
+                        MapCircle(center: zone.coordinate, radius: zone.radiusMeters)
+                            .foregroundStyle(zone.isEnabled ? Color.red.opacity(0.12) : Color.gray.opacity(0.04))
+                            .stroke(zone.isEnabled ? Color.red.opacity(0.8) : Color.gray.opacity(0.55), lineWidth: 2)
 
-                    Annotation(zone.name, coordinate: zone.coordinate) {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(zone.isEnabled ? .red : .secondary)
-                            .padding(6)
-                            .background(.regularMaterial, in: Circle())
-                    }
-                }
-
-                ForEach(locationManager.mapNotes) { note in
-                    Annotation(note.displayTitle, coordinate: note.coordinate) {
-                        Button {
-                            selectedMapNote = note
-                        } label: {
-                            Image(systemName: "note.text")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(7)
-                                .background(.purple, in: Circle())
+                        Annotation(zone.name, coordinate: zone.coordinate) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(zone.isEnabled ? .red : .secondary)
+                                .padding(6)
+                                .background(.regularMaterial, in: Circle())
                         }
                     }
-                }
 
-                if locationManager.isHistoricalRoutesVisible {
-                    ForEach(locationManager.historicalRouteSegments) { segment in
+                    ForEach(locationManager.mapNotes) { note in
+                        Annotation(note.displayTitle, coordinate: note.coordinate) {
+                            Button {
+                                selectedMapNote = note
+                            } label: {
+                                Image(systemName: "note.text")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(7)
+                                    .background(.purple, in: Circle())
+                            }
+                        }
+                    }
+
+                    if locationManager.isHistoricalRoutesVisible {
+                        ForEach(locationManager.historicalRouteSegments) { segment in
+                            if segment.coordinates.count >= 2 {
+                                MapPolyline(coordinates: segment.coordinates)
+                                    .stroke(.gray.opacity(0.55), lineWidth: 4)
+                            }
+
+                            if segment.beginsAfterPrivateZone,
+                               let coordinate = segment.coordinates.first {
+                                privateGapAnnotation(at: coordinate)
+                            }
+                        }
+                    }
+
+                    ForEach(locationManager.selectedHistoryRouteSegments) { segment in
                         if segment.coordinates.count >= 2 {
                             MapPolyline(coordinates: segment.coordinates)
-                                .stroke(.gray.opacity(0.55), lineWidth: 4)
+                                .stroke(.orange.opacity(0.25), lineWidth: 5)
+                        }
+
+                        if segment.beginsAfterPrivateZone,
+                           (!locationManager.isHistoricalRoutesVisible
+                                || !locationManager.historicalRouteSegments.contains(where: { $0.id == segment.id })),
+                           let coordinate = segment.coordinates.first {
+                            privateGapAnnotation(at: coordinate)
+                        }
+                    }
+
+                    ForEach(locationManager.playbackRouteSegments) { segment in
+                        if segment.coordinates.count >= 2 {
+                            MapPolyline(coordinates: segment.coordinates)
+                                .stroke(.orange, lineWidth: 6)
+                        }
+                    }
+
+                    if let playbackCoordinate = locationManager.playbackCoordinate {
+                        Annotation("Playback", coordinate: playbackCoordinate) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.orange)
+                                .padding(5)
+                                .background(.regularMaterial, in: Circle())
+                        }
+                    }
+
+                    ForEach(locationManager.routeLineSegments) { segment in
+                        if segment.coordinates.count >= 2 {
+                            MapPolyline(coordinates: segment.coordinates)
+                                .stroke(.blue, lineWidth: 5)
                         }
 
                         if segment.beginsAfterPrivateZone,
@@ -68,64 +115,65 @@ struct ContentView: View {
                             privateGapAnnotation(at: coordinate)
                         }
                     }
+
+                    UserAnnotation()
                 }
-
-                ForEach(locationManager.selectedHistoryRouteSegments) { segment in
-                    if segment.coordinates.count >= 2 {
-                        MapPolyline(coordinates: segment.coordinates)
-                            .stroke(.orange.opacity(0.25), lineWidth: 5)
+                .mapControls {
+                    MapCompass()
+                    MapScaleView()
+                }
+                .onMapCameraChange { context in
+                    locationManager.updateMapCenter(context.region.center)
+                    selectedMapNotePoint = nil
+                }
+                .coordinateSpace(name: "mapCanvas")
+                .gesture(
+                    MapLongPressGesture { point in
+                        guard let coordinate = proxy.convert(point, from: .named("mapCanvas")) else { return }
+                        selectedMapNoteCoordinate = coordinate
+                        selectedMapNotePoint = point
                     }
-
-                    if segment.beginsAfterPrivateZone,
-                       (!locationManager.isHistoricalRoutesVisible
-                            || !locationManager.historicalRouteSegments.contains(where: { $0.id == segment.id })),
-                       let coordinate = segment.coordinates.first {
-                        privateGapAnnotation(at: coordinate)
+                )
+                .simultaneousGesture(
+                    SpatialTapGesture().onEnded { _ in
+                        selectedMapNotePoint = nil
+                    }
+                )
+                .overlay(alignment: .topLeading) {
+                    if let point = selectedMapNotePoint {
+                        GeometryReader { geometry in
+                            Button {
+                                selectedMapNotePoint = nil
+                                isNoteEditorPresented = true
+                            } label: {
+                                Label("Add Note", systemImage: "plus")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(width: 148, height: 48)
+                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(.secondary.opacity(0.3), lineWidth: 1)
+                                    }
+                                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                            }
+                            .buttonStyle(.plain)
+                            .position(noteMenuPosition(for: point, in: geometry.size))
+                        }
                     }
                 }
-
-                ForEach(locationManager.playbackRouteSegments) { segment in
-                    if segment.coordinates.count >= 2 {
-                        MapPolyline(coordinates: segment.coordinates)
-                            .stroke(.orange, lineWidth: 6)
-                    }
-                }
-
-                if let playbackCoordinate = locationManager.playbackCoordinate {
-                    Annotation("Playback", coordinate: playbackCoordinate) {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.orange)
-                            .padding(5)
-                            .background(.regularMaterial, in: Circle())
-                    }
-                }
-
-                ForEach(locationManager.routeLineSegments) { segment in
-                    if segment.coordinates.count >= 2 {
-                        MapPolyline(coordinates: segment.coordinates)
-                            .stroke(.blue, lineWidth: 5)
-                    }
-
-                    if segment.beginsAfterPrivateZone,
-                       let coordinate = segment.coordinates.first {
-                        privateGapAnnotation(at: coordinate)
-                    }
-                }
-
-                UserAnnotation()
+                .ignoresSafeArea()
             }
-            .mapControls {
-                MapUserLocationButton()
-                MapCompass()
-                MapScaleView()
-            }
-            .onMapCameraChange { context in
-                locationManager.updateMapCenter(context.region.center)
-            }
-            .ignoresSafeArea()
 
-            statusPanel
+            VStack(spacing: 8) {
+                HStack {
+                    Spacer()
+                    centerLocationButton
+                }
+                .padding(.horizontal, 16)
+
+                statusPanel
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
         .onAppear {
             locationManager.requestLocationAccess()
@@ -136,6 +184,40 @@ struct ContentView: View {
                 locationManager.refreshTrackingReminder()
             }
         }
+    }
+
+    private var centerLocationButton: some View {
+        Button {
+            locationManager.centerOnCurrentLocation()
+        } label: {
+            Image(systemName: "location.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: Circle())
+                .overlay(Circle().stroke(.secondary.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Center on Current Location")
+        .help("Center on Current Location")
+    }
+
+    private func noteMenuPosition(for point: CGPoint, in size: CGSize) -> CGPoint {
+        let menuWidth: CGFloat = 148
+        let menuHeight: CGFloat = 48
+        let margin: CGFloat = 12
+        let horizontalOffset = menuWidth / 2 + 12
+        let verticalOffset = menuHeight / 2 + 12
+
+        let preferredX = point.x + horizontalOffset + menuWidth / 2 <= size.width - margin
+            ? point.x + horizontalOffset
+            : point.x - horizontalOffset
+        let x = min(max(preferredX, menuWidth / 2 + margin), size.width - menuWidth / 2 - margin)
+        let preferredY = point.y - verticalOffset >= margin
+            ? point.y - verticalOffset
+            : point.y + verticalOffset
+        let y = min(max(preferredY, menuHeight / 2 + margin), size.height - menuHeight / 2 - margin)
+
+        return CGPoint(x: x, y: y)
     }
 
     private func openAppSettings() {
@@ -260,14 +342,6 @@ struct ContentView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    isNoteEditorPresented = true
-                } label: {
-                    Label("Add Note", systemImage: "plus")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
                     isPrivateZonesPresented = true
                 } label: {
                     Label("Private Zones", systemImage: "lock.shield")
@@ -340,7 +414,10 @@ struct ContentView: View {
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $isNoteEditorPresented) {
-            NoteEditorView(locationManager: locationManager)
+            NoteEditorView(
+                locationManager: locationManager,
+                initialCoordinate: selectedMapNoteCoordinate
+            )
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $isStorageImpactPresented) {
@@ -354,6 +431,48 @@ struct ContentView: View {
         .sheet(item: $selectedMapNote) { note in
             MapNoteDetailView(note: note)
                 .presentationDetents([.medium])
+        }
+    }
+}
+
+private struct MapLongPressGesture: UIGestureRecognizerRepresentable {
+    let action: (CGPoint) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let recognizer = UILongPressGestureRecognizer()
+        recognizer.minimumPressDuration = 0.5
+        recognizer.allowableMovement = 10
+        recognizer.cancelsTouchesInView = false
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UILongPressGestureRecognizer, context: Context) {
+        context.coordinator.action = action
+        recognizer.delegate = context.coordinator
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UILongPressGestureRecognizer, context: Context) {
+        guard recognizer.state == .began else { return }
+        context.coordinator.action(context.converter.location(in: .local))
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var action: (CGPoint) -> Void
+
+        init(action: @escaping (CGPoint) -> Void) {
+            self.action = action
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
     }
 }
@@ -448,12 +567,19 @@ struct HistoryView: View {
 
 struct NoteEditorView: View {
     @ObservedObject var locationManager: LocationManager
+    let initialCoordinate: CLLocationCoordinate2D?
     @Environment(\.dismiss) private var dismiss
-    @State private var target = MapNoteTarget.mapCenter
+    @State private var target: MapNoteTarget
     @State private var selectedPlace: MapPlaceCandidate?
     @State private var title = ""
     @State private var text = ""
     @State private var selectedPhotos: [PhotosPickerItem] = []
+
+    init(locationManager: LocationManager, initialCoordinate: CLLocationCoordinate2D? = nil) {
+        self.locationManager = locationManager
+        self.initialCoordinate = initialCoordinate
+        _target = State(initialValue: initialCoordinate == nil ? .mapCenter : .selectedCoordinate)
+    }
 
     var body: some View {
         NavigationStack {
@@ -464,7 +590,7 @@ struct NoteEditorView: View {
                             Text(target.label).tag(target)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
 
                     Text(target.description)
                         .font(.caption)
@@ -474,7 +600,7 @@ struct NoteEditorView: View {
                 Section("Nearby Places") {
                     Button {
                         Task {
-                            await locationManager.searchNearbyPlaces()
+                            await locationManager.searchNearbyPlaces(near: initialCoordinate)
                         }
                     } label: {
                         Label("Find Nearby Places", systemImage: "mappin.and.ellipse")
@@ -557,6 +683,7 @@ struct NoteEditorView: View {
                                 text: text,
                                 target: target,
                                 selectedPlace: selectedPlace,
+                                selectedCoordinate: initialCoordinate,
                                 selectedPhotos: selectedPhotos
                             )
                             dismiss()
@@ -587,6 +714,22 @@ struct MapNoteDetailView: View {
                     }
                 }
 
+                Section("Photos") {
+                    if note.photoLocalPaths.isEmpty {
+                        Label("No photos attached", systemImage: "photo")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(note.photoLocalPaths, id: \.self) { path in
+                            MapNotePhotoView(path: path)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 210)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+
+                        LabeledContent("Attached", value: "\(note.photoLocalPaths.count)")
+                    }
+                }
+
                 Section("Position") {
                     if let placeName = note.placeName {
                         LabeledContent("Place", value: placeName)
@@ -601,11 +744,6 @@ struct MapNoteDetailView: View {
                     LabeledContent("Created", value: note.createdAt.formatted(date: .abbreviated, time: .shortened))
                 }
 
-                if !note.photoLocalPaths.isEmpty {
-                    Section("Photos") {
-                        LabeledContent("Attached", value: "\(note.photoLocalPaths.count)")
-                    }
-                }
             }
             .navigationTitle("Map Note")
             .toolbar {
@@ -619,9 +757,47 @@ struct MapNoteDetailView: View {
     }
 }
 
+private struct MapNotePhotoView: View {
+    let path: String
+    @State private var image: UIImage?
+    @State private var isUnavailable = false
+
+    var body: some View {
+        ZStack {
+            Color.secondary.opacity(0.08)
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(8)
+                    .accessibilityLabel("Note photo")
+            } else if isUnavailable {
+                ContentUnavailableView("Photo Unavailable", systemImage: "photo")
+            } else {
+                ProgressView()
+            }
+        }
+        .task(id: path) {
+            let data = await Task.detached(priority: .userInitiated) {
+                try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)
+            }.value
+
+            guard !Task.isCancelled else { return }
+            guard let data, let loadedImage = UIImage(data: data) else {
+                isUnavailable = true
+                return
+            }
+
+            image = loadedImage
+        }
+    }
+}
+
 enum MapNoteTarget: String, CaseIterable, Identifiable {
     case mapCenter
     case currentLocation
+    case selectedCoordinate
     case selectedPlace
 
     var id: String {
@@ -634,6 +810,8 @@ enum MapNoteTarget: String, CaseIterable, Identifiable {
             "Map Center"
         case .currentLocation:
             "Current Location"
+        case .selectedCoordinate:
+            "Selected Point"
         case .selectedPlace:
             "Place"
         }
@@ -645,6 +823,8 @@ enum MapNoteTarget: String, CaseIterable, Identifiable {
             "Move the map so the place is centered, then save the note."
         case .currentLocation:
             "Save the note at your latest known location."
+        case .selectedCoordinate:
+            "Save the note at the point selected on the map."
         case .selectedPlace:
             "Save the note on the selected nearby place."
         }
@@ -917,6 +1097,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private let trackingNotificationService = TrackingNotificationService()
     private var latestKnownCoordinate: CLLocationCoordinate2D?
     private var mapCenterCoordinate: CLLocationCoordinate2D?
+    private var hasSetInitialCameraPosition = false
     private var activeSessionID: UUID?
     private var activeSessionStartedAt: Date?
     private var accumulatedBackgroundDuration: TimeInterval = 0
@@ -1065,6 +1246,16 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         mapCenterCoordinate = coordinate
     }
 
+    func centerOnCurrentLocation() {
+        guard let latestKnownCoordinate else {
+            manager.requestLocation()
+            statusMessage = "Finding your current location..."
+            return
+        }
+
+        setCameraPosition(centeredOn: latestKnownCoordinate)
+    }
+
     func savePrivateZone(_ zone: PrivateZone) {
         routeHistoryStore.savePrivateZone(zone)
         reloadPrivateZones()
@@ -1087,14 +1278,19 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         text: String,
         target: MapNoteTarget,
         selectedPlace: MapPlaceCandidate?,
+        selectedCoordinate: CLLocationCoordinate2D?,
         selectedPhotos: [PhotosPickerItem]
     ) async {
-        guard let noteTarget = noteTarget(for: target, selectedPlace: selectedPlace) else {
+        guard let noteTarget = noteTarget(
+            for: target,
+            selectedPlace: selectedPlace,
+            selectedCoordinate: selectedCoordinate
+        ) else {
             statusMessage = "Could not create note because the selected position is unavailable."
             return
         }
 
-        let photoPaths = await routeHistoryStore.saveNotePhotos(selectedPhotos)
+        let photoSaveResult = await routeHistoryStore.saveNotePhotos(selectedPhotos)
         let note = MapNote(
             id: UUID(),
             latitude: noteTarget.coordinate.latitude,
@@ -1104,18 +1300,24 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             placeName: noteTarget.place?.name,
             placeCategory: noteTarget.place?.category,
             placeIdentifier: noteTarget.place?.identifier,
-            photoLocalPaths: photoPaths,
+            photoLocalPaths: photoSaveResult.paths,
             createdAt: Date()
         )
 
         routeHistoryStore.createMapNote(note)
         reloadMapNotes()
-        statusMessage = "Saved map note."
+        if photoSaveResult.failedCount == 0 {
+            statusMessage = "Saved map note."
+        } else {
+            let count = photoSaveResult.failedCount
+            let photoText = count == 1 ? "1 photo could not be saved." : "\(count) photos could not be saved."
+            statusMessage = "Saved map note. \(photoText)"
+        }
     }
 
     @MainActor
-    func searchNearbyPlaces() async {
-        guard let center = mapCenterCoordinate ?? latestKnownCoordinate else {
+    func searchNearbyPlaces(near coordinate: CLLocationCoordinate2D? = nil) async {
+        guard let center = coordinate ?? mapCenterCoordinate ?? latestKnownCoordinate else {
             statusMessage = "Move the map to the place you want to search."
             return
         }
@@ -1263,12 +1465,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
         updateStatusAfterLocationUpdate()
 
-        cameraPosition = .region(
-            MKCoordinateRegion(
-                center: location.coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            )
-        )
+        if !hasSetInitialCameraPosition {
+            setCameraPosition(centeredOn: location.coordinate)
+            hasSetInitialCameraPosition = true
+        }
 
         guard isTracking else { return }
 
@@ -1343,7 +1543,11 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         privateZones = routeHistoryStore.loadPrivateZones()
     }
 
-    private func noteTarget(for target: MapNoteTarget, selectedPlace: MapPlaceCandidate?) -> MapNoteResolvedTarget? {
+    private func noteTarget(
+        for target: MapNoteTarget,
+        selectedPlace: MapPlaceCandidate?,
+        selectedCoordinate: CLLocationCoordinate2D?
+    ) -> MapNoteResolvedTarget? {
         switch target {
         case .mapCenter:
             return (mapCenterCoordinate ?? latestKnownCoordinate).map {
@@ -1353,6 +1557,12 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             return latestKnownCoordinate.map {
                 MapNoteResolvedTarget(coordinate: $0, place: nil)
             }
+        case .selectedCoordinate:
+            guard let selectedCoordinate else {
+                return nil
+            }
+
+            return MapNoteResolvedTarget(coordinate: selectedCoordinate, place: nil)
         case .selectedPlace:
             guard let selectedPlace else {
                 return nil
@@ -1389,6 +1599,15 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
                     latitudeDelta: latitudeDelta,
                     longitudeDelta: longitudeDelta
                 )
+            )
+        )
+    }
+
+    private func setCameraPosition(centeredOn coordinate: CLLocationCoordinate2D) {
+        cameraPosition = .region(
+            MKCoordinateRegion(
+                center: coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
             )
         )
     }
@@ -1908,23 +2127,25 @@ private final class RouteHistoryStore {
         return notes
     }
 
-    func saveNotePhotos(_ selectedPhotos: [PhotosPickerItem]) async -> [String] {
+    func saveNotePhotos(_ selectedPhotos: [PhotosPickerItem]) async -> (paths: [String], failedCount: Int) {
         var paths: [String] = []
+        var failedCount = 0
 
         for selectedPhoto in selectedPhotos {
-            guard let data = try? await selectedPhoto.loadTransferable(type: Data.self) else {
-                continue
-            }
-
             do {
+                guard let data = try await selectedPhoto.loadTransferable(type: Data.self) else {
+                    failedCount += 1
+                    continue
+                }
+
                 let photoURL = try writeNotePhotoData(data)
                 paths.append(photoURL.path)
             } catch {
-                assertionFailure("Failed to save note photo: \(error.localizedDescription)")
+                failedCount += 1
             }
         }
 
-        return paths
+        return (paths, failedCount)
     }
 
     private func openDatabase() {
