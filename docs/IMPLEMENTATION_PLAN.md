@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first thirteen implementation phases completed:
+The project currently has the first fourteen implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -23,6 +23,8 @@ The project currently has the first thirteen implementation phases completed:
 - the app shows approximate local data usage and stored item counts;
 - the app shows recent tracking time, background time, location updates, and accuracy mode;
 - the app explains battery impact as activity context and directs users to Settings > Battery for Apple's per-app report;
+- the user can create, edit, enable, disable, and delete local private zones;
+- route points in enabled private zones are not stored, and route lines visibly break after those zones;
 - the app can create local map notes with text and photos;
 - the app can attach map notes to nearby places when MapKit returns place data;
 - the project builds successfully.
@@ -426,13 +428,14 @@ Status:
 
 - completed.
 
-### 14. Private Zones
+### 14. Private Zones - Completed
 
 Add areas where route points are not saved.
 
 Scope:
 
 - create a private zone with center, radius, name, and enabled state;
+- edit or delete an existing private zone;
 - detect whether a new location point is inside an active private zone;
 - skip saving points inside active private zones;
 - show private-zone gaps on the route.
@@ -443,13 +446,25 @@ Done when:
 - route gaps are visible and understandable on the map;
 - the user can enable or disable a private zone.
 
+Implementation details:
+
+- private zones are stored locally in SQLite and shown as circles on the map;
+- points are withheld when their reported GPS uncertainty overlaps an enabled zone;
+- the first saved point after leaving a zone starts a new route segment and displays a lock marker;
+- previously recorded history is not altered when a private zone is created;
+- existing databases add a defaulted route-segment flag so older route history remains intact.
+
+Status:
+
+- completed.
+
 ## Near-Term Milestone
 
 The next milestone is:
 
-> Private Zones.
+> History deletion by date or time range.
 
-This milestone should let the user exclude sensitive areas from route recording while keeping the route gap visible.
+This milestone should let the user remove selected local route history without deleting unrelated data.
 
 ## Later Work
 

@@ -22,11 +22,26 @@ struct ContentView: View {
     @State private var isHistoryPresented = false
     @State private var isNoteEditorPresented = false
     @State private var isStorageImpactPresented = false
+    @State private var isPrivateZonesPresented = false
     @State private var selectedMapNote: MapNote?
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $locationManager.cameraPosition) {
+                ForEach(locationManager.privateZones) { zone in
+                    MapCircle(center: zone.coordinate, radius: zone.radiusMeters)
+                        .foregroundStyle(zone.isEnabled ? Color.red.opacity(0.12) : Color.gray.opacity(0.04))
+                        .stroke(zone.isEnabled ? Color.red.opacity(0.8) : Color.gray.opacity(0.55), lineWidth: 2)
+
+                    Annotation(zone.name, coordinate: zone.coordinate) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(zone.isEnabled ? .red : .secondary)
+                            .padding(6)
+                            .background(.regularMaterial, in: Circle())
+                    }
+                }
+
                 ForEach(locationManager.mapNotes) { note in
                     Annotation(note.displayTitle, coordinate: note.coordinate) {
                         Button {
@@ -47,17 +62,33 @@ struct ContentView: View {
                             MapPolyline(coordinates: segment.coordinates)
                                 .stroke(.gray.opacity(0.55), lineWidth: 4)
                         }
+
+                        if segment.beginsAfterPrivateZone,
+                           let coordinate = segment.coordinates.first {
+                            privateGapAnnotation(at: coordinate)
+                        }
                     }
                 }
 
-                if locationManager.selectedHistoryRouteCoordinates.count >= 2 {
-                    MapPolyline(coordinates: locationManager.selectedHistoryRouteCoordinates)
-                        .stroke(.orange.opacity(0.25), lineWidth: 5)
+                ForEach(locationManager.selectedHistoryRouteSegments) { segment in
+                    if segment.coordinates.count >= 2 {
+                        MapPolyline(coordinates: segment.coordinates)
+                            .stroke(.orange.opacity(0.25), lineWidth: 5)
+                    }
+
+                    if segment.beginsAfterPrivateZone,
+                       (!locationManager.isHistoricalRoutesVisible
+                            || !locationManager.historicalRouteSegments.contains(where: { $0.id == segment.id })),
+                       let coordinate = segment.coordinates.first {
+                        privateGapAnnotation(at: coordinate)
+                    }
                 }
 
-                if locationManager.playbackRouteCoordinates.count >= 2 {
-                    MapPolyline(coordinates: locationManager.playbackRouteCoordinates)
-                        .stroke(.orange, lineWidth: 6)
+                ForEach(locationManager.playbackRouteSegments) { segment in
+                    if segment.coordinates.count >= 2 {
+                        MapPolyline(coordinates: segment.coordinates)
+                            .stroke(.orange, lineWidth: 6)
+                    }
                 }
 
                 if let playbackCoordinate = locationManager.playbackCoordinate {
@@ -70,9 +101,16 @@ struct ContentView: View {
                     }
                 }
 
-                if locationManager.routeCoordinates.count >= 2 {
-                    MapPolyline(coordinates: locationManager.routeCoordinates)
-                        .stroke(.blue, lineWidth: 5)
+                ForEach(locationManager.routeLineSegments) { segment in
+                    if segment.coordinates.count >= 2 {
+                        MapPolyline(coordinates: segment.coordinates)
+                            .stroke(.blue, lineWidth: 5)
+                    }
+
+                    if segment.beginsAfterPrivateZone,
+                       let coordinate = segment.coordinates.first {
+                        privateGapAnnotation(at: coordinate)
+                    }
                 }
 
                 UserAnnotation()
@@ -106,6 +144,17 @@ struct ContentView: View {
         }
 
         openURL(settingsURL)
+    }
+
+    private func privateGapAnnotation(at coordinate: CLLocationCoordinate2D) -> some MapContent {
+        Annotation("Route resumed after private zone", coordinate: coordinate) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(5)
+                .background(.purple, in: Circle())
+                .accessibilityLabel("Route resumed after private zone")
+        }
     }
 
     private var statusPanel: some View {
@@ -209,13 +258,33 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             }
 
-            Button {
-                isNoteEditorPresented = true
-            } label: {
-                Label("Add Note", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                Button {
+                    isNoteEditorPresented = true
+                } label: {
+                    Label("Add Note", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    isPrivateZonesPresented = true
+                } label: {
+                    Label("Private Zones", systemImage: "lock.shield")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
+
+            if locationManager.isWithinPrivateZone {
+                Label("Inside a private zone. Route points are not being saved.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if locationManager.hasVisiblePrivateZoneGaps {
+                Label("Lock markers show where recording resumed after a private zone.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack {
                 Label(
@@ -276,6 +345,10 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isStorageImpactPresented) {
             StorageImpactView(locationManager: locationManager)
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $isPrivateZonesPresented) {
+            PrivateZonesView(locationManager: locationManager)
                 .presentationDetents([.medium, .large])
         }
         .sheet(item: $selectedMapNote) { note in
@@ -599,12 +672,14 @@ private struct MapNoteResolvedTarget {
 
 struct RoutePoint: Identifiable {
     let id: UUID
+    let sessionID: UUID?
     let latitude: Double
     let longitude: Double
     let timestamp: Date
     let horizontalAccuracy: Double
     let altitude: Double
     let speed: Double
+    let startsNewSegment: Bool
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -629,7 +704,8 @@ struct RouteSession: Identifiable {
 
 struct HistoricalRouteSegment: Identifiable {
     let id: UUID
-    let coordinates: [CLLocationCoordinate2D]
+    var coordinates: [CLLocationCoordinate2D]
+    let beginsAfterPrivateZone: Bool
 }
 
 struct MapNote: Identifiable {
@@ -680,6 +756,30 @@ struct HistoryRouteSummary {
     }
 }
 
+private func routeSegments(from points: [RoutePoint]) -> [HistoricalRouteSegment] {
+    var segments: [HistoricalRouteSegment] = []
+    var previousSessionID: UUID?
+    var hasPreviousPoint = false
+
+    for point in points {
+        if !hasPreviousPoint || point.sessionID != previousSessionID || point.startsNewSegment {
+            segments.append(
+                HistoricalRouteSegment(
+                    id: point.id,
+                    coordinates: [point.coordinate],
+                    beginsAfterPrivateZone: point.startsNewSegment
+                )
+            )
+        } else {
+            segments[segments.count - 1].coordinates.append(point.coordinate)
+        }
+        previousSessionID = point.sessionID
+        hasPreviousPoint = true
+    }
+
+    return segments
+}
+
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cameraPosition: MapCameraPosition = .automatic
     @Published var statusMessage = "Requesting your location..."
@@ -704,13 +804,38 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published private(set) var isSearchingNearbyPlaces = false
     @Published private(set) var storageUsageSummary: LocalStorageSummary?
     @Published private(set) var latestTrackingActivitySummary: TrackingActivitySummary?
+    @Published private(set) var privateZones: [PrivateZone] = []
+    @Published private(set) var isWithinPrivateZone = false
 
-    var routeCoordinates: [CLLocationCoordinate2D] {
-        routePoints.map(\.coordinate)
+    var routeLineSegments: [HistoricalRouteSegment] {
+        routeSegments(from: routePoints)
     }
 
-    var selectedHistoryRouteCoordinates: [CLLocationCoordinate2D] {
-        selectedHistoryRoutePoints.map(\.coordinate)
+    var selectedHistoryRouteSegments: [HistoricalRouteSegment] {
+        routeSegments(from: selectedHistoryRoutePoints)
+    }
+
+    var playbackRouteSegments: [HistoricalRouteSegment] {
+        guard let playbackPointIndex else { return [] }
+        return routeSegments(from: Array(selectedHistoryRoutePoints.prefix(playbackPointIndex + 1)))
+    }
+
+    var hasVisiblePrivateZoneGaps: Bool {
+        routeLineSegments.contains(where: \.beginsAfterPrivateZone)
+            || selectedHistoryRouteSegments.contains(where: \.beginsAfterPrivateZone)
+            || (isHistoricalRoutesVisible && historicalRouteSegments.contains(where: \.beginsAfterPrivateZone))
+    }
+
+    var mapCenterForPrivateZone: CLLocationCoordinate2D? {
+        mapCenterCoordinate
+    }
+
+    var currentLocationForPrivateZone: CLLocationCoordinate2D? {
+        latestKnownCoordinate
+    }
+
+    var privateZoneCreationCoordinate: CLLocationCoordinate2D? {
+        mapCenterCoordinate ?? latestKnownCoordinate
     }
 
     var playbackPointIndex: Int? {
@@ -720,14 +845,6 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
         let lastIndex = selectedHistoryRoutePoints.count - 1
         return min(max(Int((Double(lastIndex) * playbackProgress).rounded()), 0), lastIndex)
-    }
-
-    var playbackRouteCoordinates: [CLLocationCoordinate2D] {
-        guard let playbackPointIndex else {
-            return []
-        }
-
-        return selectedHistoryRoutePoints.prefix(playbackPointIndex + 1).map(\.coordinate)
     }
 
     var playbackCoordinate: CLLocationCoordinate2D? {
@@ -804,6 +921,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private var activeSessionStartedAt: Date?
     private var accumulatedBackgroundDuration: TimeInterval = 0
     private var backgroundStartedAt: Date?
+    private var routeNeedsNewSegment = false
 
     override init() {
         super.init()
@@ -813,6 +931,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         reloadHistoricalRouteSegments()
         reloadActiveDaySummaries()
         reloadMapNotes()
+        reloadPrivateZones()
     }
 
     func requestLocationAccess() {
@@ -946,6 +1065,22 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         mapCenterCoordinate = coordinate
     }
 
+    func savePrivateZone(_ zone: PrivateZone) {
+        routeHistoryStore.savePrivateZone(zone)
+        reloadPrivateZones()
+    }
+
+    func setPrivateZoneEnabled(_ id: UUID, isEnabled: Bool) {
+        guard var zone = privateZones.first(where: { $0.id == id }) else { return }
+        zone.isEnabled = isEnabled
+        savePrivateZone(zone)
+    }
+
+    func deletePrivateZone(_ id: UUID) {
+        routeHistoryStore.deletePrivateZone(id)
+        reloadPrivateZones()
+    }
+
     @MainActor
     func createMapNote(
         title: String,
@@ -1060,6 +1195,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         locationUpdateCount = 0
         accumulatedBackgroundDuration = 0
         backgroundStartedAt = nil
+        routeNeedsNewSegment = false
+        isWithinPrivateZone = false
         isTracking = true
         configureBackgroundTracking()
         manager.startUpdatingLocation()
@@ -1089,6 +1226,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         }
         activeSessionID = nil
         activeSessionStartedAt = nil
+        routeNeedsNewSegment = false
+        isWithinPrivateZone = false
         reloadHistoricalRouteSegments()
         reloadActiveDaySummaries()
         routePoints = []
@@ -1133,15 +1272,32 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
         guard isTracking else { return }
 
+        if privateZones.contains(where: { $0.contains(location) }) {
+            routeNeedsNewSegment = true
+            isWithinPrivateZone = true
+            return
+        }
+
+        isWithinPrivateZone = false
+
+        if let previousLocation = routePoints.last?.location,
+           privateZones.contains(where: { $0.intersectsRouteSegment(from: previousLocation, to: location) }) {
+            routeNeedsNewSegment = true
+        }
+
         guard locationFilter.shouldAccept(location, after: routePoints.last) else { return }
 
-        let routePoint = RoutePoint(location: location)
+        guard let activeSessionID else { return }
+        let routePoint = RoutePoint(
+            location: location,
+            sessionID: activeSessionID,
+            startsNewSegment: routeNeedsNewSegment
+        )
         routePoints.append(routePoint)
         collectedPointCount = routePoints.count
+        routeNeedsNewSegment = false
 
-        if let activeSessionID {
-            routeHistoryStore.insertPoint(routePoint, sessionID: activeSessionID)
-        }
+        routeHistoryStore.insertPoint(routePoint, sessionID: activeSessionID)
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -1181,6 +1337,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func reloadMapNotes() {
         mapNotes = routeHistoryStore.loadMapNotes()
+    }
+
+    private func reloadPrivateZones() {
+        privateZones = routeHistoryStore.loadPrivateZones()
     }
 
     private func noteTarget(for target: MapNoteTarget, selectedPlace: MapPlaceCandidate?) -> MapNoteResolvedTarget? {
@@ -1235,14 +1395,16 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 }
 
 private extension RoutePoint {
-    init(location: CLLocation) {
+    init(location: CLLocation, sessionID: UUID, startsNewSegment: Bool) {
         self.id = UUID()
+        self.sessionID = sessionID
         self.latitude = location.coordinate.latitude
         self.longitude = location.coordinate.longitude
         self.timestamp = location.timestamp
         self.horizontalAccuracy = location.horizontalAccuracy
         self.altitude = location.altitude
         self.speed = location.speed
+        self.startsNewSegment = startsNewSegment
     }
 }
 
@@ -1448,9 +1610,10 @@ private final class RouteHistoryStore {
                 timestamp,
                 horizontal_accuracy,
                 altitude,
-                speed
+                speed,
+                starts_new_segment
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
 
         withPreparedStatement(sql) { statement in
@@ -1462,6 +1625,62 @@ private final class RouteHistoryStore {
             bind(point.horizontalAccuracy, to: statement, at: 6)
             bind(point.altitude, to: statement, at: 7)
             bind(point.speed, to: statement, at: 8)
+            bind(point.startsNewSegment ? Int32(1) : Int32(0), to: statement, at: 9)
+            step(statement)
+        }
+    }
+
+    func loadPrivateZones() -> [PrivateZone] {
+        let sql = """
+            SELECT id, name, latitude, longitude, radius_meters, is_enabled
+            FROM private_zones
+            ORDER BY name COLLATE NOCASE ASC;
+            """
+        var zones: [PrivateZone] = []
+
+        withPreparedStatement(sql) { statement in
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let id = stringValue(from: statement, at: 0).flatMap(UUID.init(uuidString:)) else {
+                    continue
+                }
+
+                zones.append(
+                    PrivateZone(
+                        id: id,
+                        name: stringValue(from: statement, at: 1) ?? "Private Zone",
+                        latitude: sqlite3_column_double(statement, 2),
+                        longitude: sqlite3_column_double(statement, 3),
+                        radiusMeters: sqlite3_column_double(statement, 4),
+                        isEnabled: sqlite3_column_int(statement, 5) != 0
+                    )
+                )
+            }
+        }
+
+        return zones
+    }
+
+    func savePrivateZone(_ zone: PrivateZone) {
+        let sql = """
+            INSERT OR REPLACE INTO private_zones (
+                id, name, latitude, longitude, radius_meters, is_enabled
+            ) VALUES (?, ?, ?, ?, ?, ?);
+            """
+
+        withPreparedStatement(sql) { statement in
+            bind(zone.id.uuidString, to: statement, at: 1)
+            bind(zone.name, to: statement, at: 2)
+            bind(zone.latitude, to: statement, at: 3)
+            bind(zone.longitude, to: statement, at: 4)
+            bind(zone.radiusMeters, to: statement, at: 5)
+            bind(zone.isEnabled ? Int32(1) : Int32(0), to: statement, at: 6)
+            step(statement)
+        }
+    }
+
+    func deletePrivateZone(_ id: UUID) {
+        withPreparedStatement("DELETE FROM private_zones WHERE id = ?;") { statement in
+            bind(id.uuidString, to: statement, at: 1)
             step(statement)
         }
     }
@@ -1470,12 +1689,14 @@ private final class RouteHistoryStore {
         let sql = """
             SELECT
                 route_points.id,
+                route_points.session_id,
                 route_points.latitude,
                 route_points.longitude,
                 route_points.timestamp,
                 route_points.horizontal_accuracy,
                 route_points.altitude,
-                route_points.speed
+                route_points.speed,
+                route_points.starts_new_segment
             FROM route_points
             INNER JOIN route_sessions ON route_sessions.id = route_points.session_id
             WHERE route_points.timestamp >= ? AND route_points.timestamp <= ?
@@ -1492,16 +1713,21 @@ private final class RouteHistoryStore {
                 guard let id = stringValue(from: statement, at: 0).flatMap(UUID.init(uuidString:)) else {
                     continue
                 }
+                guard let sessionID = stringValue(from: statement, at: 1).flatMap(UUID.init(uuidString:)) else {
+                    continue
+                }
 
                 points.append(
                     RoutePoint(
                         id: id,
-                        latitude: sqlite3_column_double(statement, 1),
-                        longitude: sqlite3_column_double(statement, 2),
-                        timestamp: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3)),
-                        horizontalAccuracy: sqlite3_column_double(statement, 4),
-                        altitude: sqlite3_column_double(statement, 5),
-                        speed: sqlite3_column_double(statement, 6)
+                        sessionID: sessionID,
+                        latitude: sqlite3_column_double(statement, 2),
+                        longitude: sqlite3_column_double(statement, 3),
+                        timestamp: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
+                        horizontalAccuracy: sqlite3_column_double(statement, 5),
+                        altitude: sqlite3_column_double(statement, 6),
+                        speed: sqlite3_column_double(statement, 7),
+                        startsNewSegment: sqlite3_column_int(statement, 8) != 0
                     )
                 )
             }
@@ -1517,8 +1743,10 @@ private final class RouteHistoryStore {
         let sql = """
             SELECT
                 s.id,
+                p.id,
                 p.latitude,
-                p.longitude
+                p.longitude,
+                p.starts_new_segment
             FROM route_sessions s
             INNER JOIN route_points p ON p.session_id = s.id
             WHERE s.ended_at IS NOT NULL AND p.timestamp >= ?
@@ -1526,7 +1754,8 @@ private final class RouteHistoryStore {
             LIMIT ?;
             """
         var segments: [HistoricalRouteSegmentBuilder] = []
-        var segmentIndexesByID: [UUID: Int] = [:]
+        var previousSessionID: UUID?
+        var currentSegmentIndex: Int?
 
         withPreparedStatement(sql) { statement in
             bind(earliestTimestamp, to: statement, at: 1)
@@ -1536,29 +1765,42 @@ private final class RouteHistoryStore {
                 guard let sessionID = stringValue(from: statement, at: 0).flatMap(UUID.init(uuidString:)) else {
                     continue
                 }
+                guard let pointID = stringValue(from: statement, at: 1).flatMap(UUID.init(uuidString:)) else {
+                    continue
+                }
 
                 let coordinate = CLLocationCoordinate2D(
-                    latitude: sqlite3_column_double(statement, 1),
-                    longitude: sqlite3_column_double(statement, 2)
+                    latitude: sqlite3_column_double(statement, 2),
+                    longitude: sqlite3_column_double(statement, 3)
                 )
+                let beginsAfterPrivateZone = sqlite3_column_int(statement, 4) != 0
+                let startsSegment = previousSessionID != sessionID || beginsAfterPrivateZone
 
-                if let segmentIndex = segmentIndexesByID[sessionID] {
+                if !startsSegment, let segmentIndex = currentSegmentIndex {
                     segments[segmentIndex].coordinates.append(coordinate)
                 } else {
-                    segmentIndexesByID[sessionID] = segments.count
+                    currentSegmentIndex = segments.count
                     segments.append(
                         HistoricalRouteSegmentBuilder(
-                            id: sessionID,
-                            coordinates: [coordinate]
+                            id: pointID,
+                            coordinates: [coordinate],
+                            beginsAfterPrivateZone: beginsAfterPrivateZone
                         )
                     )
                 }
+                previousSessionID = sessionID
             }
         }
 
         return segments
-            .filter { $0.coordinates.count >= 2 }
-            .map { HistoricalRouteSegment(id: $0.id, coordinates: $0.coordinates) }
+            .filter { $0.coordinates.count >= 2 || $0.beginsAfterPrivateZone }
+            .map {
+                HistoricalRouteSegment(
+                    id: $0.id,
+                    coordinates: $0.coordinates,
+                    beginsAfterPrivateZone: $0.beginsAfterPrivateZone
+                )
+            }
     }
 
     func loadActiveDaySummaries() -> [ActiveDaySummary] {
@@ -1733,9 +1975,16 @@ private final class RouteHistoryStore {
                 horizontal_accuracy REAL NOT NULL,
                 altitude REAL NOT NULL,
                 speed REAL NOT NULL,
+                starts_new_segment INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(session_id) REFERENCES route_sessions(id) ON DELETE CASCADE
             );
             """)
+
+        addColumnIfNeeded(
+            table: "route_points",
+            column: "starts_new_segment",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
 
         execute("""
             CREATE INDEX IF NOT EXISTS idx_route_points_session_timestamp
@@ -1745,6 +1994,17 @@ private final class RouteHistoryStore {
         execute("""
             CREATE INDEX IF NOT EXISTS idx_route_points_timestamp
             ON route_points(timestamp);
+            """)
+
+        execute("""
+            CREATE TABLE IF NOT EXISTS private_zones (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                radius_meters REAL NOT NULL,
+                is_enabled INTEGER NOT NULL DEFAULT 1
+            );
             """)
 
         execute("""
@@ -1979,4 +2239,5 @@ private final class RouteHistoryStore {
 private struct HistoricalRouteSegmentBuilder {
     let id: UUID
     var coordinates: [CLLocationCoordinate2D]
+    let beginsAfterPrivateZone: Bool
 }
