@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first eight implementation phases completed:
+The project currently has the first nine implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -16,6 +16,7 @@ The project currently has the first eight implementation phases completed:
 - the app can show completed historical routes as a separate map layer;
 - the app can load route history for a selected date;
 - the app can play back a selected route with a timeline slider;
+- the app can create local map notes with text and photos;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -257,13 +258,15 @@ Status:
 
 - completed.
 
-### 9. Map Notes
+### 9. Map Notes - Completed
 
 Add user-created notes on the map.
 
 Scope:
 
-- add a map button for creating a note at the current position;
+- add a map button for creating a note;
+- allow notes to be created at the current position;
+- allow notes to be created at any point on the map by moving the map center to the target place;
 - store note text locally;
 - attach one or more local photos to a note;
 - show notes as markers on the map;
@@ -273,9 +276,23 @@ Scope:
 Done when:
 
 - the user can create a note at the current location;
+- the user can create a note for a place that is not their current location;
 - the user can add text and photos to the note;
 - the note remains available after app restart;
 - notes are visible and tappable on the map.
+
+Initial implementation:
+
+- the main map panel has an Add Note button;
+- notes can target the user's latest known location or the current map center;
+- note title, description, and up to four photos are stored locally;
+- note markers are shown on the map;
+- tapping a note marker opens note details;
+- map notes are stored in SQLite and photo files are stored in Application Support.
+
+Status:
+
+- completed.
 
 ### 10. Place-Based Map Notes
 
@@ -373,9 +390,9 @@ Done when:
 
 The next milestone is:
 
-> Map notes.
+> Place-based map notes.
 
-This milestone should let the user add text and photo notes at the current position or while browsing history.
+This milestone should let the user attach notes to selected map places or points of interest when place data is available.
 
 ## Later Work
 
