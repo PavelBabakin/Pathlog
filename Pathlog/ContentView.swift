@@ -19,6 +19,15 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $locationManager.cameraPosition) {
+                if locationManager.isHistoricalRoutesVisible {
+                    ForEach(locationManager.historicalRouteSegments) { segment in
+                        if segment.coordinates.count >= 2 {
+                            MapPolyline(coordinates: segment.coordinates)
+                                .stroke(.gray.opacity(0.55), lineWidth: 4)
+                        }
+                    }
+                }
+
                 if locationManager.routeCoordinates.count >= 2 {
                     MapPolyline(coordinates: locationManager.routeCoordinates)
                         .stroke(.blue, lineWidth: 5)
@@ -60,6 +69,27 @@ struct ContentView: View {
             }
 
             Divider()
+
+            HStack {
+                Label(
+                    "\(locationManager.historicalRouteCount) previous routes",
+                    systemImage: "point.topleft.down.curvedto.point.bottomright.up"
+                )
+                .font(.subheadline.weight(.medium))
+
+                Spacer()
+
+                Button {
+                    locationManager.toggleHistoricalRoutesVisibility()
+                } label: {
+                    Label(
+                        locationManager.isHistoricalRoutesVisible ? "Hide" : "Show",
+                        systemImage: locationManager.isHistoricalRoutesVisible ? "eye.slash" : "eye"
+                    )
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.bordered)
+            }
 
             HStack {
                 Label(
@@ -121,16 +151,27 @@ struct RouteSession: Identifiable {
     var endedAt: Date?
 }
 
+struct HistoricalRouteSegment: Identifiable {
+    let id: UUID
+    let coordinates: [CLLocationCoordinate2D]
+}
+
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cameraPosition: MapCameraPosition = .automatic
     @Published var statusMessage = "Requesting your location..."
     @Published var shouldShowPermissionButton = false
     @Published var isTracking = false
+    @Published var isHistoricalRoutesVisible = true
     @Published var collectedPointCount = 0
     @Published private(set) var routePoints: [RoutePoint] = []
+    @Published private(set) var historicalRouteSegments: [HistoricalRouteSegment] = []
 
     var routeCoordinates: [CLLocationCoordinate2D] {
         routePoints.map(\.coordinate)
+    }
+
+    var historicalRouteCount: Int {
+        historicalRouteSegments.count
     }
 
     var canTrack: Bool {
@@ -166,6 +207,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
+        reloadHistoricalRouteSegments()
     }
 
     func requestLocationAccess() {
@@ -197,6 +239,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         }
     }
 
+    func toggleHistoricalRoutesVisibility() {
+        isHistoricalRoutesVisible.toggle()
+    }
+
     private func startTracking() {
         let session = RouteSession(id: UUID(), startedAt: Date(), endedAt: nil)
         routeHistoryStore.createSession(session)
@@ -215,6 +261,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         }
         activeSessionID = nil
         activeSessionStartedAt = nil
+        reloadHistoricalRouteSegments()
+        routePoints = []
         statusMessage = "Tracking stopped with \(collectedPointCount) points."
     }
 
@@ -263,6 +311,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         } else {
             statusMessage = "Showing your current location."
         }
+    }
+
+    private func reloadHistoricalRouteSegments() {
+        historicalRouteSegments = routeHistoryStore.loadHistoricalRouteSegments()
     }
 }
 
@@ -331,6 +383,8 @@ private struct TrackingLocationFilter {
 }
 
 private final class RouteHistoryStore {
+    private let historicalLookbackDays: TimeInterval = 90
+    private let historicalPointLimit: Int32 = 10_000
     private let fileManager: FileManager
     private var database: OpaquePointer?
 
@@ -444,6 +498,57 @@ private final class RouteHistoryStore {
         return points
     }
 
+    func loadHistoricalRouteSegments() -> [HistoricalRouteSegment] {
+        let earliestTimestamp = Date()
+            .addingTimeInterval(-historicalLookbackDays * 24 * 60 * 60)
+            .timeIntervalSince1970
+        let sql = """
+            SELECT
+                s.id,
+                p.latitude,
+                p.longitude
+            FROM route_sessions s
+            INNER JOIN route_points p ON p.session_id = s.id
+            WHERE s.ended_at IS NOT NULL AND p.timestamp >= ?
+            ORDER BY s.started_at ASC, p.timestamp ASC
+            LIMIT ?;
+            """
+        var segments: [HistoricalRouteSegmentBuilder] = []
+        var segmentIndexesByID: [UUID: Int] = [:]
+
+        withPreparedStatement(sql) { statement in
+            bind(earliestTimestamp, to: statement, at: 1)
+            bind(historicalPointLimit, to: statement, at: 2)
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let sessionID = stringValue(from: statement, at: 0).flatMap(UUID.init(uuidString:)) else {
+                    continue
+                }
+
+                let coordinate = CLLocationCoordinate2D(
+                    latitude: sqlite3_column_double(statement, 1),
+                    longitude: sqlite3_column_double(statement, 2)
+                )
+
+                if let segmentIndex = segmentIndexesByID[sessionID] {
+                    segments[segmentIndex].coordinates.append(coordinate)
+                } else {
+                    segmentIndexesByID[sessionID] = segments.count
+                    segments.append(
+                        HistoricalRouteSegmentBuilder(
+                            id: sessionID,
+                            coordinates: [coordinate]
+                        )
+                    )
+                }
+            }
+        }
+
+        return segments
+            .filter { $0.coordinates.count >= 2 }
+            .map { HistoricalRouteSegment(id: $0.id, coordinates: $0.coordinates) }
+    }
+
     private func openDatabase() {
         do {
             let databaseURL = routeHistoryDatabaseURL()
@@ -524,6 +629,10 @@ private final class RouteHistoryStore {
         sqlite3_bind_double(statement, index, value)
     }
 
+    private func bind(_ value: Int32, to statement: OpaquePointer?, at index: Int32) {
+        sqlite3_bind_int(statement, index, value)
+    }
+
     private func step(_ statement: OpaquePointer?) {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             assertionFailure("SQLite step failed: \(lastDatabaseErrorMessage)")
@@ -557,4 +666,9 @@ private final class RouteHistoryStore {
             .appendingPathComponent("Pathlog", isDirectory: true)
             .appendingPathComponent("pathlog.sqlite")
     }
+}
+
+private struct HistoricalRouteSegmentBuilder {
+    let id: UUID
+    var coordinates: [CLLocationCoordinate2D]
 }
