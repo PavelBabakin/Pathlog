@@ -29,6 +29,11 @@ final class TrackingNotificationService {
             return .permissionDenied
         }
 
+        let pendingRequests = await center.pendingNotificationRequests()
+        if pendingRequests.contains(where: { $0.identifier == Self.reminderIdentifier }) {
+            return .scheduled
+        }
+
         let content = UNMutableNotificationContent()
         content.title = "Pathlog tracking is active"
         content.body = "Your route is still being recorded. Open Pathlog to stop tracking."
