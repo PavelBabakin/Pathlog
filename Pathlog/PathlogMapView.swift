@@ -27,6 +27,46 @@ struct PathlogMapGapMarker: Identifiable {
     let kind: Kind
 }
 
+struct MapFeatureCoordinate: Equatable {
+    let latitude: CLLocationDegrees
+    let longitude: CLLocationDegrees
+
+    var locationCoordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+struct MapFeaturePolygon: Equatable {
+    let exteriorRing: [MapFeatureCoordinate]
+    let interiorRings: [[MapFeatureCoordinate]]
+}
+
+struct MapFeatureSelection: Equatable {
+    let identifier: String?
+    let sourceLayer: String
+    let geometryJSON: String?
+    let polygons: [MapFeaturePolygon]
+}
+
+struct MapLocationSelection: Equatable, Identifiable {
+    let id: UUID
+    let coordinate: MapFeatureCoordinate
+    let feature: MapFeatureSelection?
+
+    init(coordinate: CLLocationCoordinate2D, feature: MapFeatureSelection?) {
+        self.id = UUID()
+        self.coordinate = MapFeatureCoordinate(
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude
+        )
+        self.feature = feature
+    }
+
+    var locationCoordinate: CLLocationCoordinate2D {
+        coordinate.locationCoordinate
+    }
+}
+
 struct PathlogMapView: UIViewRepresentable {
     let styleURL: URL
     let privateZones: [PrivateZone]
@@ -39,8 +79,9 @@ struct PathlogMapView: UIViewRepresentable {
     let zoneRevision: UInt64
     let markerRevision: UInt64
     let cameraCommand: PathlogMapCameraCommand?
+    let selectedLocation: MapLocationSelection?
     let onCameraChange: (CLLocationCoordinate2D) -> Void
-    let onLongPress: (CGPoint, CLLocationCoordinate2D) -> Void
+    let onLongPress: (CGPoint, MapLocationSelection) -> Void
     let onNoteSelected: (UUID) -> Void
     let onMapLoadError: (String?) -> Void
 
@@ -90,6 +131,7 @@ struct PathlogMapView: UIViewRepresentable {
         if coordinator.isStyleLoaded {
             coordinator.applyContentIfNeeded(to: mapView)
             coordinator.applyCurrentLocationIfNeeded(to: mapView)
+            coordinator.applySelectedLocationIfNeeded(to: mapView)
             coordinator.applyCameraCommandIfNeeded(to: mapView)
         }
     }
@@ -103,13 +145,18 @@ struct PathlogMapView: UIViewRepresentable {
         private var lastZoneRevision: UInt64?
         private var lastMarkerRevision: UInt64?
         private var lastCurrentCoordinate: CLLocationCoordinate2D?
+        private var lastSelectedLocationID: UUID?
         private var lastCameraCommandID: UUID?
         private var routeOverlays: [MLNOverlay] = []
         private var zoneOverlays: [MLNOverlay] = []
         private var markerAnnotations: [PathlogPointAnnotation] = []
         private var currentLocationAnnotation: PathlogPointAnnotation?
+        private var selectedLocationAnnotation: PathlogPointAnnotation?
+        private var selectedFeaturePolygons: [MLNPolygon] = []
+        private var selectedFeatureOutlines: [MLNPolyline] = []
         private var routeStyles: [ObjectIdentifier: RouteStyle] = [:]
         private var zoneStyles: [ObjectIdentifier: ZoneStyle] = [:]
+        private var selectedFeatureStyles: [ObjectIdentifier: ZoneStyle] = [:]
 
         init(parent: PathlogMapView) {
             self.parent = parent
@@ -125,7 +172,10 @@ struct PathlogMapView: UIViewRepresentable {
 
             let point = recognizer.location(in: mapView)
             let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
-            parent.onLongPress(point, coordinate)
+            let feature = buildingFeature(at: point, coordinate: coordinate, in: mapView)
+            let selection = MapLocationSelection(coordinate: coordinate, feature: feature)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            parent.onLongPress(point, selection)
         }
 
         func gestureRecognizer(
@@ -141,8 +191,10 @@ struct PathlogMapView: UIViewRepresentable {
             lastRouteRevision = nil
             lastZoneRevision = nil
             lastMarkerRevision = nil
+            lastSelectedLocationID = nil
             applyContentIfNeeded(to: mapView)
             applyCurrentLocationIfNeeded(to: mapView)
+            applySelectedLocationIfNeeded(to: mapView)
             applyCameraCommandIfNeeded(to: mapView)
             parent.onMapLoadError(nil)
         }
@@ -226,11 +278,17 @@ struct PathlogMapView: UIViewRepresentable {
             if let polyline = annotation as? MLNPolyline {
                 return routeStyles[ObjectIdentifier(polyline)]?.color ?? .systemBlue
             }
+            if let style = selectedFeatureStyles[ObjectIdentifier(annotation)] {
+                return style.stroke
+            }
             return zoneStyles[ObjectIdentifier(annotation)]?.stroke ?? .systemRed
         }
 
         func mapView(_ mapView: MLNMapView, fillColorForPolygonAnnotation annotation: MLNPolygon) -> UIColor {
-            zoneStyles[ObjectIdentifier(annotation)]?.fill ?? UIColor.systemRed.withAlphaComponent(0.12)
+            if let style = selectedFeatureStyles[ObjectIdentifier(annotation)] {
+                return style.fill
+            }
+            return zoneStyles[ObjectIdentifier(annotation)]?.fill ?? UIColor.systemRed.withAlphaComponent(0.12)
         }
 
         func mapView(_ mapView: MLNMapView, lineWidthForPolylineAnnotation annotation: MLNPolyline) -> CGFloat {
@@ -303,6 +361,54 @@ struct PathlogMapView: UIViewRepresentable {
             applyCurrentLocationIfNeeded(to: mapView)
         }
 
+        func applySelectedLocationIfNeeded(to mapView: MLNMapView) {
+            guard lastSelectedLocationID != parent.selectedLocation?.id else { return }
+
+            mapView.removeOverlays(selectedFeaturePolygons + selectedFeatureOutlines)
+            selectedFeaturePolygons.forEach {
+                selectedFeatureStyles.removeValue(forKey: ObjectIdentifier($0))
+            }
+            selectedFeatureOutlines.forEach {
+                routeStyles.removeValue(forKey: ObjectIdentifier($0))
+            }
+            selectedFeaturePolygons.removeAll(keepingCapacity: true)
+            selectedFeatureOutlines.removeAll(keepingCapacity: true)
+
+            if let selectedLocationAnnotation {
+                mapView.removeAnnotation(selectedLocationAnnotation)
+            }
+
+            if let selection = parent.selectedLocation {
+                if let feature = selection.feature {
+                    for featurePolygon in feature.polygons {
+                        guard let polygon = makePolygon(from: featurePolygon) else { continue }
+                        selectedFeaturePolygons.append(polygon)
+                        selectedFeatureStyles[ObjectIdentifier(polygon)] = ZoneStyle(
+                            stroke: UIColor.systemTeal,
+                            fill: UIColor.systemTeal.withAlphaComponent(0.22)
+                        )
+                        selectedFeatureOutlines += makeOutlines(from: featurePolygon)
+                    }
+                    selectedFeatureOutlines.forEach {
+                        routeStyles[ObjectIdentifier($0)] = RouteStyle(color: .systemTeal, width: 3)
+                    }
+                    mapView.addOverlays(selectedFeaturePolygons + selectedFeatureOutlines)
+                }
+
+                let marker = PathlogPointAnnotation(
+                    coordinate: selection.locationCoordinate,
+                    visual: .selectedLocation,
+                    label: nil
+                )
+                selectedLocationAnnotation = marker
+                mapView.addAnnotation(marker)
+            } else {
+                selectedLocationAnnotation = nil
+            }
+
+            lastSelectedLocationID = parent.selectedLocation?.id
+        }
+
         func applyCurrentLocationIfNeeded(to mapView: MLNMapView) {
             guard !sameCoordinate(lastCurrentCoordinate, parent.currentCoordinate) else { return }
             if let currentLocationAnnotation {
@@ -370,6 +476,144 @@ struct PathlogMapView: UIViewRepresentable {
             }
         }
 
+        private func buildingFeature(
+            at point: CGPoint,
+            coordinate: CLLocationCoordinate2D,
+            in mapView: MLNMapView
+        ) -> MapFeatureSelection? {
+            guard let style = mapView.style else { return nil }
+            let buildingLayerIdentifiers = Set(style.layers.compactMap { layer -> String? in
+                guard
+                    let vectorLayer = layer as? MLNVectorStyleLayer,
+                    vectorLayer.sourceLayerIdentifier == "building"
+                else {
+                    return nil
+                }
+
+                return layer.identifier
+            })
+            guard !buildingLayerIdentifiers.isEmpty else { return nil }
+
+            for feature in mapView.visibleFeatures(at: point, styleLayerIdentifiers: buildingLayerIdentifiers) {
+                let polygons: [MLNPolygon]
+                if let polygon = feature as? MLNPolygonFeature {
+                    polygons = [polygon]
+                } else if let multiPolygon = feature as? MLNMultiPolygonFeature {
+                    polygons = multiPolygon.polygons
+                } else {
+                    continue
+                }
+
+                guard
+                    let selectedPolygon = polygons
+                        .compactMap(mapFeaturePolygon(from:))
+                        .first(where: { contains(coordinate, in: $0) })
+                else {
+                    continue
+                }
+
+                return MapFeatureSelection(
+                    identifier: feature.identifier.map { String(describing: $0) },
+                    sourceLayer: "building",
+                    geometryJSON: geometryJSON(for: selectedPolygon),
+                    polygons: [selectedPolygon]
+                )
+            }
+
+            return nil
+        }
+
+        private func mapFeaturePolygon(from polygon: MLNPolygon) -> MapFeaturePolygon? {
+            let exteriorRing = mapFeatureRing(from: polygon)
+            guard exteriorRing.count >= 4 else { return nil }
+            let interiorRings = (polygon.interiorPolygons ?? []).map(mapFeatureRing(from:))
+            return MapFeaturePolygon(exteriorRing: exteriorRing, interiorRings: interiorRings)
+        }
+
+        private func contains(_ coordinate: CLLocationCoordinate2D, in polygon: MapFeaturePolygon) -> Bool {
+            ringContains(coordinate, ring: polygon.exteriorRing)
+                && !polygon.interiorRings.contains { ringContains(coordinate, ring: $0) }
+        }
+
+        private func ringContains(
+            _ coordinate: CLLocationCoordinate2D,
+            ring: [MapFeatureCoordinate]
+        ) -> Bool {
+            guard ring.count >= 3 else { return false }
+            var isInside = false
+            var previousIndex = ring.count - 1
+
+            for currentIndex in ring.indices {
+                let current = ring[currentIndex]
+                let previous = ring[previousIndex]
+                let crossesLatitude = (current.latitude > coordinate.latitude)
+                    != (previous.latitude > coordinate.latitude)
+
+                if crossesLatitude {
+                    let crossingLongitude = (previous.longitude - current.longitude)
+                        * (coordinate.latitude - current.latitude)
+                        / (previous.latitude - current.latitude)
+                        + current.longitude
+                    if coordinate.longitude < crossingLongitude {
+                        isInside.toggle()
+                    }
+                }
+
+                previousIndex = currentIndex
+            }
+
+            return isInside
+        }
+
+        private func geometryJSON(for polygon: MapFeaturePolygon) -> String? {
+            let rings = [polygon.exteriorRing] + polygon.interiorRings
+            let geometry: [String: Any] = [
+                "type": "Polygon",
+                "coordinates": rings.map { ring in
+                    ring.map { [$0.longitude, $0.latitude] }
+                }
+            ]
+            guard
+                JSONSerialization.isValidJSONObject(geometry),
+                let data = try? JSONSerialization.data(withJSONObject: geometry, options: [.sortedKeys])
+            else {
+                return nil
+            }
+            return String(data: data, encoding: .utf8)
+        }
+
+        private func mapFeatureRing(from polygon: MLNPolygon) -> [MapFeatureCoordinate] {
+            let count = Int(polygon.pointCount)
+            guard count > 0 else { return [] }
+            let coordinates = Array(UnsafeBufferPointer(start: polygon.coordinates, count: count))
+            return coordinates.map {
+                MapFeatureCoordinate(latitude: $0.latitude, longitude: $0.longitude)
+            }
+        }
+
+        private func makePolygon(from featurePolygon: MapFeaturePolygon) -> MLNPolygon? {
+            let coordinates = featurePolygon.exteriorRing.map(\.locationCoordinate)
+            guard coordinates.count >= 4 else { return nil }
+            let interiorPolygons = featurePolygon.interiorRings.compactMap { ring -> MLNPolygon? in
+                let coordinates = ring.map(\.locationCoordinate)
+                guard coordinates.count >= 4 else { return nil }
+                return MLNPolygon(coordinates: coordinates, count: UInt(coordinates.count))
+            }
+            return MLNPolygon(
+                coordinates: coordinates,
+                count: UInt(coordinates.count),
+                interiorPolygons: interiorPolygons
+            )
+        }
+
+        private func makeOutlines(from featurePolygon: MapFeaturePolygon) -> [MLNPolyline] {
+            ([featurePolygon.exteriorRing] + featurePolygon.interiorRings).compactMap { ring in
+                let coordinates = ring.map(\.locationCoordinate)
+                guard coordinates.count >= 2 else { return nil }
+                return MLNPolyline(coordinates: coordinates, count: UInt(coordinates.count))
+            }
+        }
+
         private func addHouseNumberLayer(to style: MLNStyle) {
             let layerID = "pathlog-house-numbers"
             guard
@@ -408,6 +652,11 @@ private struct RouteStyle {
     let color: UIColor
     let width: CGFloat
 
+    init(color: UIColor, width: CGFloat) {
+        self.color = color
+        self.width = width
+    }
+
     init(appearance: PathlogMapRouteLine.Appearance) {
         switch appearance {
         case .historical:
@@ -429,6 +678,11 @@ private struct RouteStyle {
 private struct ZoneStyle {
     let stroke: UIColor
     let fill: UIColor
+
+    init(stroke: UIColor, fill: UIColor) {
+        self.stroke = stroke
+        self.fill = fill
+    }
 
     init(isEnabled: Bool) {
         stroke = isEnabled ? UIColor.systemRed.withAlphaComponent(0.8) : UIColor.systemGray.withAlphaComponent(0.55)
@@ -465,6 +719,7 @@ private final class PathlogPointAnnotation: NSObject, MLNAnnotation {
         case trackingGap
         case playback
         case currentLocation
+        case selectedLocation
 
         var symbol: String {
             switch self {
@@ -474,6 +729,7 @@ private final class PathlogPointAnnotation: NSObject, MLNAnnotation {
             case .trackingGap: "clock.fill"
             case .playback: "circle.fill"
             case .currentLocation: "location.fill"
+            case .selectedLocation: "mappin.and.ellipse"
             }
         }
 
@@ -485,6 +741,7 @@ private final class PathlogPointAnnotation: NSObject, MLNAnnotation {
             case .trackingGap: .systemGray
             case .playback: .systemOrange
             case .currentLocation: .systemBlue
+            case .selectedLocation: .systemTeal
             }
         }
 
@@ -497,6 +754,7 @@ private final class PathlogPointAnnotation: NSObject, MLNAnnotation {
             case .trackingGap: "tracking-gap"
             case .playback: "playback-position"
             case .currentLocation: "current-location"
+            case .selectedLocation: "selected-map-location"
             }
         }
 
@@ -509,6 +767,7 @@ private final class PathlogPointAnnotation: NSObject, MLNAnnotation {
             case .trackingGap: "Location recording resumed after a gap"
             case .playback: "Playback position"
             case .currentLocation: "Current location"
+            case .selectedLocation: "Selected map location"
             }
         }
     }
