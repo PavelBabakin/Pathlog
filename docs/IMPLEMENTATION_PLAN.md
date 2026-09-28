@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first fourteen implementation phases completed:
+The project currently has the first sixteen implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -25,8 +25,9 @@ The project currently has the first fourteen implementation phases completed:
 - the app explains battery impact as activity context and directs users to Settings > Battery for Apple's per-app report;
 - the user can create, edit, enable, disable, and delete local private zones;
 - route points in enabled private zones are not stored, and route lines visibly break after those zones;
-- the app can create local map notes with text and photos;
-- the app can attach map notes to nearby places when MapKit returns place data;
+- the user can create personal places by long-pressing a location on the map;
+- personal places retain exact coordinates and available building geometry references;
+- personal place names and notes can include locally stored photos;
 - the project builds successfully.
 
 ## Implementation Phases
@@ -491,7 +492,7 @@ Future deployment:
 - the initial integration may use the public OpenFreeMap instance;
 - OpenFreeMap will be hosted on the project's own server in a later infrastructure task.
 
-### 16. Personal Places and Map Note Creation - Planned
+### 16. Personal Places and Map Note Creation - Completed
 
 Redesign map-note creation around personal places selected directly on the map. This phase replaces the earlier map-button and map-center note-creation flow.
 
@@ -524,13 +525,13 @@ Dependencies:
 
 Status:
 
-- planned.
+- completed.
 
 ## Near-Term Milestone
 
-The next milestone is:
+The next milestone is to test Phase 16 on a physical iPhone and define the next implementation scope.
 
-> Phase 16: create personal places directly from the map.
+Phase 16 is implemented and builds for iOS Simulator and iOS devices.
 
 History deletion by date or time range remains planned for a later phase. It should let the user remove selected local route history without deleting unrelated data.
 
