@@ -23,10 +23,13 @@ struct ContentView: View {
     @State private var isNoteEditorPresented = false
     @State private var isStorageImpactPresented = false
     @State private var isPrivateZonesPresented = false
+    @State private var isQuickPrivateZoneEditorPresented = false
     @State private var isMapUnavailable = false
     @State private var selectedMapLocation: MapLocationSelection?
     @State private var selectedMapNotePoint: CGPoint?
     @State private var selectedMapNote: MapNote?
+    @State private var selectedPrivateZone: PrivateZone?
+    @State private var privateZoneCreationCoordinate: CLLocationCoordinate2D?
 
     var body: some View {
         ZStack {
@@ -52,6 +55,11 @@ struct ContentView: View {
                     selectedMapLocation = selection
                     selectedMapNotePoint = point
                 },
+                onPrivateZoneSelected: { zoneID in
+                    selectedMapLocation = nil
+                    selectedMapNotePoint = nil
+                    selectedPrivateZone = locationManager.privateZones.first { $0.id == zoneID }
+                },
                 onNoteSelected: { noteID in
                     selectedMapNote = locationManager.mapNotes.first { $0.id == noteID }
                 },
@@ -72,21 +80,40 @@ struct ContentView: View {
             .overlay(alignment: .topLeading) {
                 if let point = selectedMapNotePoint {
                     GeometryReader { geometry in
-                        Button {
-                            isNoteEditorPresented = true
-                        } label: {
-                            Label("Create Note", systemImage: "plus")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 148, height: 48)
-                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(.secondary.opacity(0.3), lineWidth: 1)
-                                }
-                                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                        VStack(spacing: 0) {
+                            Button {
+                                isNoteEditorPresented = true
+                            } label: {
+                                Label("Create Note", systemImage: "plus")
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 46)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Divider()
+
+                            Button {
+                                guard let coordinate = selectedMapLocation?.locationCoordinate else { return }
+                                privateZoneCreationCoordinate = coordinate
+                                isQuickPrivateZoneEditorPresented = true
+                            } label: {
+                                Label("Add Private Zone", systemImage: "lock.shield")
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 46)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                        .position(noteMenuPosition(for: point, in: geometry.size))
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 204)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(.secondary.opacity(0.3), lineWidth: 1)
+                        }
+                        .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                        .position(mapContextMenuPosition(for: point, in: geometry.size))
                     }
                 }
             }
@@ -147,9 +174,9 @@ struct ContentView: View {
         .padding(.top, 154)
     }
 
-    private func noteMenuPosition(for point: CGPoint, in size: CGSize) -> CGPoint {
-        let menuWidth: CGFloat = 148
-        let menuHeight: CGFloat = 48
+    private func mapContextMenuPosition(for point: CGPoint, in size: CGSize) -> CGPoint {
+        let menuWidth: CGFloat = 204
+        let menuHeight: CGFloat = 94
         let margin: CGFloat = 12
         let horizontalOffset = menuWidth / 2 + 12
         let verticalOffset = menuHeight / 2 + 12
@@ -432,6 +459,23 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isPrivateZonesPresented) {
             PrivateZonesView(locationManager: locationManager)
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $isQuickPrivateZoneEditorPresented, onDismiss: {
+            privateZoneCreationCoordinate = nil
+            selectedMapNotePoint = nil
+            selectedMapLocation = nil
+        }) {
+            if let privateZoneCreationCoordinate {
+                QuickPrivateZoneEditorView(
+                    locationManager: locationManager,
+                    centerCoordinate: privateZoneCreationCoordinate
+                )
+                .presentationDetents([.medium, .large])
+            }
+        }
+        .sheet(item: $selectedPrivateZone) { zone in
+            PrivateZoneMapEditorView(locationManager: locationManager, zone: zone)
                 .presentationDetents([.medium, .large])
         }
         .sheet(item: $selectedMapNote) { note in
@@ -1118,6 +1162,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     func setPrivateZoneEnabled(_ id: UUID, isEnabled: Bool) {
         guard var zone = privateZones.first(where: { $0.id == id }) else { return }
+        guard !isEnabled || zone.radiusMeters > 0 else { return }
         zone.isEnabled = isEnabled
         savePrivateZone(zone)
     }

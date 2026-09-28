@@ -82,6 +82,7 @@ struct PathlogMapView: UIViewRepresentable {
     let selectedLocation: MapLocationSelection?
     let onCameraChange: (CLLocationCoordinate2D) -> Void
     let onLongPress: (CGPoint, MapLocationSelection) -> Void
+    let onPrivateZoneSelected: (UUID) -> Void
     let onNoteSelected: (UUID) -> Void
     let onMapLoadError: (String?) -> Void
 
@@ -171,6 +172,12 @@ struct PathlogMapView: UIViewRepresentable {
             }
 
             let point = recognizer.location(in: mapView)
+            if let zoneID = privateZoneID(at: point, in: mapView) {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                parent.onPrivateZoneSelected(zoneID)
+                return
+            }
+
             let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
             let feature = buildingFeature(at: point, coordinate: coordinate, in: mapView)
             let selection = MapLocationSelection(coordinate: coordinate, feature: feature)
@@ -295,6 +302,20 @@ struct PathlogMapView: UIViewRepresentable {
             routeStyles[ObjectIdentifier(annotation)]?.width ?? 4
         }
 
+        private func privateZoneID(at point: CGPoint, in mapView: MLNMapView) -> UUID? {
+            markerAnnotations.reversed().first { marker in
+                guard
+                    marker.zoneID != nil,
+                    marker.visual == .privateZone || marker.visual == .disabledZone
+                else {
+                    return false
+                }
+
+                let markerPoint = mapView.convert(marker.coordinate, toPointTo: mapView)
+                return hypot(markerPoint.x - point.x, markerPoint.y - point.y) <= 28
+            }?.zoneID
+        }
+
         func applyContentIfNeeded(to mapView: MLNMapView) {
             guard isStyleLoaded else { return }
 
@@ -315,7 +336,8 @@ struct PathlogMapView: UIViewRepresentable {
             if lastZoneRevision != parent.zoneRevision {
                 mapView.removeOverlays(zoneOverlays)
                 zoneOverlays.forEach { zoneStyles.removeValue(forKey: ObjectIdentifier($0)) }
-                zoneOverlays = parent.privateZones.map { zone in
+                zoneOverlays = parent.privateZones.compactMap { zone in
+                    guard zone.radiusMeters > 0 else { return nil }
                     let coordinates = circleCoordinates(center: zone.coordinate, radius: zone.radiusMeters)
                     let polygon = MLNPolygon(coordinates: coordinates, count: UInt(coordinates.count))
                     zoneStyles[ObjectIdentifier(polygon)] = ZoneStyle(isEnabled: zone.isEnabled)
@@ -331,7 +353,8 @@ struct PathlogMapView: UIViewRepresentable {
                     PathlogPointAnnotation(
                         coordinate: zone.coordinate,
                         visual: zone.isEnabled ? .privateZone : .disabledZone,
-                        label: nil
+                        label: nil,
+                        zoneID: zone.id
                     )
                 }
                 markerAnnotations += parent.notes.map { note in
@@ -697,17 +720,20 @@ private final class PathlogPointAnnotation: NSObject, MLNAnnotation {
     let visual: Visual
     let label: String?
     let noteID: UUID?
+    let zoneID: UUID?
 
     init(
         coordinate: CLLocationCoordinate2D,
         visual: Visual,
         label: String?,
-        noteID: UUID? = nil
+        noteID: UUID? = nil,
+        zoneID: UUID? = nil
     ) {
         self.coordinate = coordinate
         self.visual = visual
         self.label = label
         self.noteID = noteID
+        self.zoneID = zoneID
         self.title = label
     }
 

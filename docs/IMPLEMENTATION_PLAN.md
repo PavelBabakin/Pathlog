@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The project currently has the first sixteen implementation phases completed:
+The project currently has the first seventeen implementation phases completed:
 
 - the app opens to a map;
 - the app requests location access;
@@ -24,6 +24,9 @@ The project currently has the first sixteen implementation phases completed:
 - the app shows recent tracking time, background time, location updates, and accuracy mode;
 - the app explains battery impact as activity context and directs users to Settings > Battery for Apple's per-app report;
 - the user can create, edit, enable, disable, and delete local private zones;
+- the user can create a named private zone from any long-pressed map location;
+- long pressing a private-zone marker opens its editor for changing its name or radius and deleting it;
+- active private zones appear as translucent red map circles, and Off zones do not filter route points;
 - route points in enabled private zones are not stored, and route lines visibly break after those zones;
 - the user can create personal places by long-pressing a location on the map;
 - personal places retain exact coordinates and available building geometry references;
@@ -527,11 +530,49 @@ Status:
 
 - completed.
 
+### 17. Map-Based Private Zone Creation and Editing - Completed
+
+Add private-zone creation to the map's long-press menu and allow existing zones to be managed directly from their map markers.
+
+Scope:
+
+- add an Add Private Zone action alongside Create Note in the long-press menu;
+- use the exact selected map coordinate as the new zone center;
+- let the user enter a zone name;
+- provide discrete radius choices: Off, then 200 m through 1,600 m in 200 m increments;
+- long pressing an existing private-zone marker opens that zone's editing screen, separately from long pressing an arbitrary map location to create a zone or note;
+- allow the user to change the zone name and radius from its editing screen, using the same radius choices as creation;
+- provide a delete action on the editing screen, with confirmation before the zone is removed;
+- define Off as a saved zone with no route-exclusion radius: it remains visible by its center marker but does not suppress route points;
+- display active zones as translucent red circles with a visible boundary; keep disabled or Off zones visually distinguishable;
+- save zones through the existing local SQLite storage and preserve the existing list, edit, enable/disable, and delete workflows;
+- do not alter route history already recorded when a zone is created, edited, or deleted.
+
+Done when:
+
+- long pressing the map offers both Create Note and Add Private Zone;
+- Add Private Zone opens an editor centered at the pressed coordinate;
+- the user can save a named zone using only one of the specified radius choices;
+- long pressing a saved zone marker opens its editing screen with the correct zone selected;
+- the user can update the zone name and radius, or delete the zone after confirmation;
+- Off zones do not exclude new route points, while enabled zones with a positive radius continue to use existing privacy filtering;
+- saved active zones appear immediately as translucent red circles and remain visible after restarting the app;
+- existing private-zone list management and route-gap behavior continue to work, and historical route data remains unchanged by zone management.
+
+Dependencies:
+
+- Phase 14: Private Zones;
+- Phase 16: Personal Places and Map Note Creation.
+
+Status:
+
+- completed.
+
 ## Near-Term Milestone
 
-The next milestone is to test Phase 16 on a physical iPhone and define the next implementation scope.
+The next milestone is to test the completed Phase 17 private-zone workflows on a physical iPhone and define the next implementation scope.
 
-Phase 16 is implemented and builds for iOS Simulator and iOS devices.
+Phase 17 builds for iOS Simulator and iOS devices.
 
 History deletion by date or time range remains planned for a later phase. It should let the user remove selected local route history without deleting unrelated data.
 
