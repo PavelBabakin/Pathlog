@@ -16,8 +16,8 @@ The project currently has the first fourteen implementation phases completed:
 - the app can show completed historical routes as a separate map layer;
 - the app can load route history for a selected date;
 - the app can play back a selected route with a timeline slider;
-- the app can continue recording the active route while backgrounded when Always location access is enabled;
-- the app communicates whether background tracking is enabled or limited to foreground use;
+- the app can continue recording the active route while backgrounded during an active tracking session;
+- the app communicates when background recording is active;
 - the app can send quiet local reminders while tracking is active;
 - tracking reminders stop when the user stops tracking;
 - the app shows approximate local data usage and stored item counts;
@@ -341,7 +341,7 @@ Allow tracking to continue after the app leaves the foreground.
 
 Scope:
 
-- request the required background location permissions;
+- request location access needed to show and record the user's location;
 - enable the required iOS background location capability;
 - continue recording valid points in the background;
 - clearly communicate active background tracking to the user.
@@ -354,10 +354,10 @@ Done when:
 
 Initial implementation:
 
-- the app requests Always location access when the user starts tracking or selects the background access control;
-- the target includes the Location updates background mode and clear permission descriptions;
-- background location updates and the system location indicator are enabled only while tracking with Always access;
-- the tracking screen reports whether background tracking is enabled or foreground-only;
+- the app requests While Using location access and also supports existing Always authorization;
+- the target includes the Location updates background mode and a clear While In Use purpose description;
+- background location updates and the system location indicator are enabled only during active tracking;
+- the tracking screen reports when background recording is active;
 - denied location access provides a direct route to the app's Settings page.
 
 Status:
@@ -458,13 +458,79 @@ Status:
 
 - completed.
 
+### 15. MapLibre and OpenFreeMap - Planned
+
+Replace the current Apple Maps implementation with an OpenStreetMap-based map.
+
+Scope:
+
+- use MapLibre as the map rendering SDK;
+- use OpenFreeMap as the map tile provider;
+- use the OpenFreeMap Liberty style as the initial map style;
+- keep style and tile service URLs configurable so the app can move from the public OpenFreeMap instance to a self-hosted OpenFreeMap server later;
+- preserve the existing GPS tracking and route visualization functionality;
+- display detailed map information including streets, buildings, POIs, parks, and available house numbers;
+- keep the map provider implementation separated from the GPS tracking logic so it can be replaced later if necessary.
+
+Done when:
+
+- the main map is rendered by MapLibre using the OpenFreeMap Liberty style;
+- the app can switch between public and self-hosted OpenFreeMap endpoints through provider configuration;
+- live, historical, and playback routes remain visible and behave as before;
+- current location, private zones, map notes, and map interactions continue to work;
+- map rendering and provider-specific code are isolated from location tracking and route storage;
+- GPS tracking and local route storage continue if map tiles cannot be loaded;
+- required OpenFreeMap, OpenMapTiles, and OpenStreetMap attribution, including the ODbL notice, is displayed.
+
+Status:
+
+- planned.
+
+Future deployment:
+
+- the initial integration may use the public OpenFreeMap instance;
+- OpenFreeMap will be hosted on the project's own server in a later infrastructure task.
+
+### 16. Personal Places and Map Note Creation - Planned
+
+Redesign map-note creation around personal places selected directly on the map. This phase replaces the earlier map-button and map-center note-creation flow.
+
+Scope:
+
+- let the user long press a building or location on the map;
+- detect the map feature or building polygon under the pressed location when available;
+- visually highlight the selected building polygon;
+- show a Create Note action;
+- store the exact coordinates of the selected location;
+- store the building or feature ID, or a polygon reference, when available;
+- allow multiple personal places inside the same building without making the building the place's identity;
+- display the saved personal place's name and marker on the user's map;
+- allow creating a coordinate-only personal place when no building feature is available.
+
+Done when:
+
+- a long press selects the location and highlights its building polygon when the map data provides one;
+- Create Note opens the note-creation flow for the selected location;
+- the saved personal place retains the pressed coordinates and any available map-feature reference;
+- multiple personal places can be created within one building;
+- places without a matching map feature can still be saved by coordinates;
+- saved place names and markers remain visible and open their associated note.
+
+Dependencies:
+
+- Phase 15: MapLibre and OpenFreeMap.
+
+Status:
+
+- planned.
+
 ## Near-Term Milestone
 
 The next milestone is:
 
-> History deletion by date or time range.
+> Phase 15: replace Apple Maps with MapLibre and OpenFreeMap.
 
-This milestone should let the user remove selected local route history without deleting unrelated data.
+History deletion by date or time range remains planned for a later phase. It should let the user remove selected local route history without deleting unrelated data.
 
 ## Later Work
 
