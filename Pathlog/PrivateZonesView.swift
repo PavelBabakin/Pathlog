@@ -13,8 +13,12 @@ struct PrivateZone: Identifiable, Equatable {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 
+    var radiusDescription: String {
+        radiusMeters == 0 ? "Off" : "\(Int(radiusMeters)) m radius"
+    }
+
     func contains(_ location: CLLocation) -> Bool {
-        guard isEnabled else { return false }
+        guard isEnabled, radiusMeters > 0 else { return false }
 
         let center = CLLocation(latitude: latitude, longitude: longitude)
         let uncertainty = max(0, location.horizontalAccuracy)
@@ -22,7 +26,7 @@ struct PrivateZone: Identifiable, Equatable {
     }
 
     func intersectsRouteSegment(from start: CLLocation, to end: CLLocation) -> Bool {
-        guard isEnabled else { return false }
+        guard isEnabled, radiusMeters > 0 else { return false }
 
         // Use a local meter plane to catch GPS samples that jump across a zone.
         let earthRadius = 6_371_000.0
@@ -92,7 +96,7 @@ struct PrivateZonesView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(zone.name)
                                         .font(.body.weight(.medium))
-                                    Text("\(Int(zone.radiusMeters)) m radius")
+                                    Text(zone.radiusDescription)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -107,6 +111,7 @@ struct PrivateZonesView: View {
                             )
                             .labelsHidden()
                             .accessibilityLabel("\(zone.name) enabled")
+                            .disabled(zone.radiusMeters == 0)
                         }
                         .swipeActions {
                             Button(role: .destructive) {
@@ -174,12 +179,15 @@ private struct PrivateZoneEditorView: View {
     @State private var isEnabled: Bool
     @State private var centerCoordinate: CLLocationCoordinate2D?
     @State private var centerSource: String
+    @State private var isDeleteConfirmationPresented = false
+
+    private let radiusChoices = Array(stride(from: 0.0, through: 1_600.0, by: 200.0))
 
     init(locationManager: LocationManager, existingZone: PrivateZone? = nil) {
         self.locationManager = locationManager
         self.existingZone = existingZone
         _name = State(initialValue: existingZone?.name ?? "Private Zone")
-        _radiusMeters = State(initialValue: existingZone?.radiusMeters ?? 150)
+        _radiusMeters = State(initialValue: existingZone?.radiusMeters ?? 200)
         _isEnabled = State(initialValue: existingZone?.isEnabled ?? true)
 
         let mapCenter = locationManager.mapCenterForPrivateZone
@@ -197,6 +205,7 @@ private struct PrivateZoneEditorView: View {
             Section("Zone") {
                 TextField("Name", text: $name)
                 Toggle("Enabled", isOn: $isEnabled)
+                    .disabled(radiusMeters == 0)
             }
 
             Section("Center") {
@@ -220,11 +229,34 @@ private struct PrivateZoneEditorView: View {
             }
 
             Section("Radius") {
-                LabeledContent("Zone radius", value: "\(Int(radiusMeters)) m")
-                Slider(value: $radiusMeters, in: 50...2_000, step: 25)
-                Text("Points whose GPS uncertainty overlaps the zone are also withheld.")
+                Picker("Zone radius", selection: $radiusMeters) {
+                    if let existingZone, !radiusChoices.contains(existingZone.radiusMeters) {
+                        Text("\(existingZone.radiusDescription) (current)")
+                            .tag(existingZone.radiusMeters)
+                    }
+                    ForEach(radiusChoices, id: \.self) { radius in
+                        Text(radius == 0 ? "Off" : "\(Int(radius)) m")
+                            .tag(radius)
+                    }
+                }
+                Text(radiusMeters == 0
+                    ? "Off means route points are not filtered by this zone."
+                    : "Points whose GPS uncertainty overlaps the zone are also withheld.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            if existingZone != nil {
+                Section {
+                    Button("Delete Private Zone", systemImage: "trash", role: .destructive) {
+                        isDeleteConfirmationPresented = true
+                    }
+                }
+            }
+        }
+        .onChange(of: radiusMeters) { _, newRadius in
+            if newRadius == 0 {
+                isEnabled = false
             }
         }
         .navigationTitle(existingZone == nil ? "New Private Zone" : "Edit Private Zone")
@@ -242,6 +274,20 @@ private struct PrivateZoneEditorView: View {
                 }
                 .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || centerCoordinate == nil)
             }
+        }
+        .confirmationDialog(
+            "Delete Private Zone?",
+            isPresented: $isDeleteConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Zone", role: .destructive) {
+                guard let existingZone else { return }
+                locationManager.deletePrivateZone(existingZone.id)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Previously recorded route history will not be changed.")
         }
     }
 
@@ -271,7 +317,85 @@ private struct PrivateZoneEditorView: View {
             latitude: centerCoordinate.latitude,
             longitude: centerCoordinate.longitude,
             radiusMeters: radiusMeters,
-            isEnabled: isEnabled
+            isEnabled: isEnabled && radiusMeters > 0
+        )
+        locationManager.savePrivateZone(zone)
+        dismiss()
+    }
+}
+
+struct PrivateZoneMapEditorView: View {
+    @ObservedObject var locationManager: LocationManager
+    let zone: PrivateZone
+
+    var body: some View {
+        NavigationStack {
+            PrivateZoneEditorView(locationManager: locationManager, existingZone: zone)
+        }
+    }
+}
+
+struct QuickPrivateZoneEditorView: View {
+    @ObservedObject var locationManager: LocationManager
+    let centerCoordinate: CLLocationCoordinate2D
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = "Private Zone"
+    @State private var radiusMeters = 200.0
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Zone") {
+                    TextField("Name", text: $name)
+                }
+
+                Section("Center") {
+                    LabeledContent("Selected map location", value: formattedCoordinate)
+                }
+
+                Section("Radius") {
+                    LabeledContent("Zone radius", value: radiusDescription)
+                    Slider(value: $radiusMeters, in: 0...1_600, step: 200)
+                    Text("Off keeps the zone marker but does not withhold route points.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Add Private Zone")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        saveZone()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var formattedCoordinate: String {
+        String(format: "%.5f, %.5f", centerCoordinate.latitude, centerCoordinate.longitude)
+    }
+
+    private var radiusDescription: String {
+        radiusMeters == 0 ? "Off" : "\(Int(radiusMeters)) m"
+    }
+
+    private func saveZone() {
+        let zone = PrivateZone(
+            id: UUID(),
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            latitude: centerCoordinate.latitude,
+            longitude: centerCoordinate.longitude,
+            radiusMeters: radiusMeters,
+            isEnabled: radiusMeters > 0
         )
         locationManager.savePrivateZone(zone)
         dismiss()
