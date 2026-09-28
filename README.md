@@ -5,10 +5,13 @@ Pathlog is a private iOS app for recording movement history locally on the devic
 ## Current Status
 
 - Native iOS app built with SwiftUI.
-- MapKit map is displayed on launch.
+- MapLibre Native displays the OpenFreeMap Liberty map style.
 - Location permission is requested.
 - The user's current location is shown on the map.
 - Basic Start Tracking / Stop Tracking UI is implemented.
+- GPS tracking and route history remain stored locally and are independent of map tile availability.
+
+The map style URL is configured with `PathlogMapStyleURL` in `Pathlog-Info.plist`. The configured style supplies its vector-tile, glyph, and sprite endpoints, so a compatible self-hosted OpenFreeMap style can replace the public style without changing GPS or storage code.
 
 ## Product Direction
 

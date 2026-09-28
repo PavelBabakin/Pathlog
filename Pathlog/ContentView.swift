@@ -24,167 +24,70 @@ struct ContentView: View {
     @State private var isNoteEditorPresented = false
     @State private var isStorageImpactPresented = false
     @State private var isPrivateZonesPresented = false
+    @State private var isMapUnavailable = false
     @State private var selectedMapNoteCoordinate: CLLocationCoordinate2D?
     @State private var selectedMapNotePoint: CGPoint?
     @State private var selectedMapNote: MapNote?
 
     var body: some View {
         ZStack {
-            MapReader { proxy in
-                Map(position: $locationManager.cameraPosition) {
-                    ForEach(locationManager.privateZones) { zone in
-                        MapCircle(center: zone.coordinate, radius: zone.radiusMeters)
-                            .foregroundStyle(zone.isEnabled ? Color.red.opacity(0.12) : Color.gray.opacity(0.04))
-                            .stroke(zone.isEnabled ? Color.red.opacity(0.8) : Color.gray.opacity(0.55), lineWidth: 2)
-
-                        Annotation(zone.name, coordinate: zone.coordinate) {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(zone.isEnabled ? .red : .secondary)
-                                .padding(6)
-                                .background(.regularMaterial, in: Circle())
-                        }
-                    }
-
-                    ForEach(locationManager.mapNotes) { note in
-                        Annotation(note.displayTitle, coordinate: note.coordinate) {
-                            Button {
-                                selectedMapNote = note
-                            } label: {
-                                Image(systemName: "note.text")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(7)
-                                    .background(.purple, in: Circle())
-                            }
-                        }
-                    }
-
-                    if locationManager.isHistoricalRoutesVisible {
-                        ForEach(locationManager.historicalRouteSegments) { segment in
-                            if segment.coordinates.count >= 2 {
-                                MapPolyline(coordinates: segment.coordinates)
-                                    .stroke(.gray.opacity(0.55), lineWidth: 4)
-                            }
-
-                            if segment.beginsAfterPrivateZone,
-                               let coordinate = segment.coordinates.first {
-                                privateGapAnnotation(at: coordinate)
-                            }
-
-                            if segment.beginsAfterTrackingGap,
-                               let coordinate = segment.coordinates.first {
-                                trackingGapAnnotation(at: coordinate)
-                            }
-                        }
-                    }
-
-                    ForEach(locationManager.selectedHistoryRouteSegments) { segment in
-                        if segment.coordinates.count >= 2 {
-                            MapPolyline(coordinates: segment.coordinates)
-                                .stroke(.orange.opacity(0.25), lineWidth: 5)
-                        }
-
-                        if segment.beginsAfterPrivateZone,
-                           (!locationManager.isHistoricalRoutesVisible
-                                || !locationManager.historicalRouteSegments.contains(where: { $0.id == segment.id })),
-                           let coordinate = segment.coordinates.first {
-                            privateGapAnnotation(at: coordinate)
-                        }
-
-                        if segment.beginsAfterTrackingGap,
-                           (!locationManager.isHistoricalRoutesVisible
-                                || !locationManager.historicalRouteSegments.contains(where: { $0.id == segment.id })),
-                           let coordinate = segment.coordinates.first {
-                            trackingGapAnnotation(at: coordinate)
-                        }
-                    }
-
-                    ForEach(locationManager.playbackRouteSegments) { segment in
-                        if segment.coordinates.count >= 2 {
-                            MapPolyline(coordinates: segment.coordinates)
-                                .stroke(.orange, lineWidth: 6)
-                        }
-
-                        if segment.beginsAfterTrackingGap,
-                           let coordinate = segment.coordinates.first {
-                            trackingGapAnnotation(at: coordinate)
-                        }
-                    }
-
-                    if let playbackCoordinate = locationManager.playbackCoordinate {
-                        Annotation("Playback", coordinate: playbackCoordinate) {
-                            Image(systemName: "circle.fill")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.orange)
-                                .padding(5)
-                                .background(.regularMaterial, in: Circle())
-                        }
-                    }
-
-                    ForEach(locationManager.routeLineSegments) { segment in
-                        if segment.coordinates.count >= 2 {
-                            MapPolyline(coordinates: segment.coordinates)
-                                .stroke(.blue, lineWidth: 5)
-                        }
-
-                        if segment.beginsAfterPrivateZone,
-                           let coordinate = segment.coordinates.first {
-                            privateGapAnnotation(at: coordinate)
-                        }
-
-                        if segment.beginsAfterTrackingGap,
-                           let coordinate = segment.coordinates.first {
-                            trackingGapAnnotation(at: coordinate)
-                        }
-                    }
-
-                    UserAnnotation()
+            PathlogMapView(
+                styleURL: PathlogMapProviderConfiguration.styleURL,
+                privateZones: locationManager.privateZones,
+                notes: locationManager.mapNotes,
+                routeLines: mapRouteLines,
+                gapMarkers: mapGapMarkers,
+                playbackCoordinate: locationManager.playbackCoordinate,
+                currentCoordinate: locationManager.latestKnownCoordinate,
+                routeRevision: locationManager.mapRouteRevision,
+                zoneRevision: locationManager.mapZoneRevision,
+                markerRevision: locationManager.mapMarkerRevision,
+                cameraCommand: locationManager.mapCameraCommand,
+                onCameraChange: { coordinate in
+                    locationManager.updateMapCenter(coordinate)
+                    selectedMapNotePoint = nil
+                },
+                onLongPress: { point, coordinate in
+                    selectedMapNoteCoordinate = coordinate
+                    selectedMapNotePoint = point
+                },
+                onNoteSelected: { noteID in
+                    selectedMapNote = locationManager.mapNotes.first { $0.id == noteID }
+                },
+                onMapLoadError: { error in
+                    isMapUnavailable = error != nil
                 }
-                .mapControls {
-                    MapCompass()
-                    MapScaleView()
-                }
-                .onMapCameraChange { context in
-                    locationManager.updateMapCenter(context.region.center)
+            )
+            .ignoresSafeArea()
+            .simultaneousGesture(
+                SpatialTapGesture().onEnded { _ in
                     selectedMapNotePoint = nil
                 }
-                .coordinateSpace(name: "mapCanvas")
-                .gesture(
-                    MapLongPressGesture { point in
-                        guard let coordinate = proxy.convert(point, from: .named("mapCanvas")) else { return }
-                        selectedMapNoteCoordinate = coordinate
-                        selectedMapNotePoint = point
-                    }
-                )
-                .simultaneousGesture(
-                    SpatialTapGesture().onEnded { _ in
-                        selectedMapNotePoint = nil
-                    }
-                )
-                .overlay(alignment: .topLeading) {
-                    if let point = selectedMapNotePoint {
-                        GeometryReader { geometry in
-                            Button {
-                                selectedMapNotePoint = nil
-                                isNoteEditorPresented = true
-                            } label: {
-                                Label("Add Note", systemImage: "plus")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: 148, height: 48)
-                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(.secondary.opacity(0.3), lineWidth: 1)
-                                    }
-                                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
-                            }
-                            .buttonStyle(.plain)
-                            .position(noteMenuPosition(for: point, in: geometry.size))
+            )
+            .overlay(alignment: .topLeading) {
+                mapAttribution
+            }
+            .overlay(alignment: .topLeading) {
+                if let point = selectedMapNotePoint {
+                    GeometryReader { geometry in
+                        Button {
+                            selectedMapNotePoint = nil
+                            isNoteEditorPresented = true
+                        } label: {
+                            Label("Add Note", systemImage: "plus")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 148, height: 48)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(.secondary.opacity(0.3), lineWidth: 1)
+                                }
+                                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
                         }
+                        .buttonStyle(.plain)
+                        .position(noteMenuPosition(for: point, in: geometry.size))
                     }
                 }
-                .ignoresSafeArea()
             }
 
             VStack(spacing: 8) {
@@ -224,6 +127,25 @@ struct ContentView: View {
         .help("Center on Current Location")
     }
 
+    private var mapAttribution: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Link("© OpenFreeMap", destination: URL(string: "https://openfreemap.org")!)
+                Link("© OpenMapTiles", destination: URL(string: "https://openmaptiles.org")!)
+            }
+            Link(
+                "© OpenStreetMap contributors (ODbL)",
+                destination: URL(string: "https://www.openstreetmap.org/copyright")!
+            )
+        }
+        .font(.system(size: 9, weight: .medium))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .padding(.leading, 12)
+        .padding(.top, 154)
+    }
+
     private func noteMenuPosition(for point: CGPoint, in size: CGSize) -> CGPoint {
         let menuWidth: CGFloat = 148
         let menuHeight: CGFloat = 48
@@ -251,25 +173,77 @@ struct ContentView: View {
         openURL(settingsURL)
     }
 
-    private func privateGapAnnotation(at coordinate: CLLocationCoordinate2D) -> some MapContent {
-        Annotation("Route resumed after private zone", coordinate: coordinate) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(5)
-                .background(.purple, in: Circle())
-                .accessibilityLabel("Route resumed after private zone")
+    private var mapRouteLines: [PathlogMapRouteLine] {
+        var lines: [PathlogMapRouteLine] = []
+        if locationManager.isHistoricalRoutesVisible {
+            lines += pathlogLines(locationManager.historicalRouteSegments, prefix: "history", appearance: .historical)
+        }
+        lines += pathlogLines(locationManager.selectedHistoryRouteSegments, prefix: "selected", appearance: .selectedHistory)
+        lines += pathlogLines(locationManager.playbackRouteSegments, prefix: "playback", appearance: .playback)
+        lines += pathlogLines(locationManager.routeLineSegments, prefix: "live", appearance: .live)
+        return lines
+    }
+
+    private var mapGapMarkers: [PathlogMapGapMarker] {
+        var markers: [PathlogMapGapMarker] = []
+        let historicalIDs = Set(locationManager.historicalRouteSegments.map(\.id))
+
+        if locationManager.isHistoricalRoutesVisible {
+            appendGapMarkers(from: locationManager.historicalRouteSegments, prefix: "history", to: &markers)
+        }
+        appendGapMarkers(
+            from: locationManager.selectedHistoryRouteSegments.filter {
+                !locationManager.isHistoricalRoutesVisible || !historicalIDs.contains($0.id)
+            },
+            prefix: "selected",
+            to: &markers
+        )
+        appendGapMarkers(
+            from: locationManager.playbackRouteSegments.filter(\.beginsAfterTrackingGap),
+            prefix: "playback",
+            to: &markers,
+            includePrivateGaps: false
+        )
+        appendGapMarkers(from: locationManager.routeLineSegments, prefix: "live", to: &markers)
+        return markers
+    }
+
+    private func pathlogLines(
+        _ segments: [HistoricalRouteSegment],
+        prefix: String,
+        appearance: PathlogMapRouteLine.Appearance
+    ) -> [PathlogMapRouteLine] {
+        segments.map {
+            PathlogMapRouteLine(
+                id: "\(prefix)-\($0.id.uuidString)",
+                coordinates: $0.coordinates,
+                appearance: appearance
+            )
         }
     }
 
-    private func trackingGapAnnotation(at coordinate: CLLocationCoordinate2D) -> some MapContent {
-        Annotation("Location recording resumed", coordinate: coordinate) {
-            Image(systemName: "clock.fill")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(5)
-                .background(.gray, in: Circle())
-                .accessibilityLabel("Location recording resumed after a gap")
+    private func appendGapMarkers(
+        from segments: [HistoricalRouteSegment],
+        prefix: String,
+        to markers: inout [PathlogMapGapMarker],
+        includePrivateGaps: Bool = true
+    ) {
+        for segment in segments {
+            guard let coordinate = segment.coordinates.first else { continue }
+            if includePrivateGaps && segment.beginsAfterPrivateZone {
+                markers.append(PathlogMapGapMarker(
+                    id: "\(prefix)-private-\(segment.id.uuidString)",
+                    coordinate: coordinate,
+                    kind: .privateZone
+                ))
+            }
+            if segment.beginsAfterTrackingGap {
+                markers.append(PathlogMapGapMarker(
+                    id: "\(prefix)-tracking-\(segment.id.uuidString)",
+                    coordinate: coordinate,
+                    kind: .tracking
+                ))
+            }
         }
     }
 
@@ -281,6 +255,12 @@ struct ContentView: View {
             Text(locationManager.statusMessage)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+
+            if isMapUnavailable {
+                Label("Map data is unavailable. GPS tracking continues.", systemImage: "wifi.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             if locationManager.shouldShowPermissionButton {
                 Button {
@@ -458,48 +438,6 @@ struct ContentView: View {
     }
 }
 
-private struct MapLongPressGesture: UIGestureRecognizerRepresentable {
-    let action: (CGPoint) -> Void
-
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator(action: action)
-    }
-
-    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
-        let recognizer = UILongPressGestureRecognizer()
-        recognizer.minimumPressDuration = 0.5
-        recognizer.allowableMovement = 10
-        recognizer.cancelsTouchesInView = false
-        recognizer.delegate = context.coordinator
-        return recognizer
-    }
-
-    func updateUIGestureRecognizer(_ recognizer: UILongPressGestureRecognizer, context: Context) {
-        context.coordinator.action = action
-        recognizer.delegate = context.coordinator
-    }
-
-    func handleUIGestureRecognizerAction(_ recognizer: UILongPressGestureRecognizer, context: Context) {
-        guard recognizer.state == .began else { return }
-        context.coordinator.action(context.converter.location(in: .local))
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var action: (CGPoint) -> Void
-
-        init(action: @escaping (CGPoint) -> Void) {
-            self.action = action
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-        ) -> Bool {
-            true
-        }
-    }
-}
-
 struct HistoryView: View {
     @ObservedObject var locationManager: LocationManager
     @Environment(\.dismiss) private var dismiss
@@ -557,7 +495,10 @@ struct HistoryView: View {
                             }
 
                             Slider(
-                                value: $locationManager.playbackProgress,
+                                value: Binding(
+                                    get: { locationManager.playbackProgress },
+                                    set: { locationManager.updatePlaybackProgress($0) }
+                                ),
                                 in: 0...1
                             )
                         }
@@ -997,7 +938,10 @@ private func routeSegments(from points: [RoutePoint]) -> [HistoricalRouteSegment
 }
 
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
-    @Published var cameraPosition: MapCameraPosition = .automatic
+    @Published private(set) var mapCameraCommand: PathlogMapCameraCommand?
+    @Published private(set) var mapRouteRevision: UInt64 = 0
+    @Published private(set) var mapZoneRevision: UInt64 = 0
+    @Published private(set) var mapMarkerRevision: UInt64 = 0
     @Published var statusMessage = "Requesting your location..."
     @Published var shouldShowPermissionButton = false
     @Published private(set) var reminderStatusMessage: String?
@@ -1020,6 +964,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published private(set) var latestTrackingActivitySummary: TrackingActivitySummary?
     @Published private(set) var privateZones: [PrivateZone] = []
     @Published private(set) var isWithinPrivateZone = false
+    @Published private(set) var latestKnownCoordinate: CLLocationCoordinate2D?
 
     var routeLineSegments: [HistoricalRouteSegment] {
         routeSegments(from: routePoints)
@@ -1133,7 +1078,6 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private let locationFilter = TrackingLocationFilter()
     private let routeHistoryStore = RouteHistoryStore()
     private let trackingNotificationService = TrackingNotificationService()
-    private var latestKnownCoordinate: CLLocationCoordinate2D?
     private var mapCenterCoordinate: CLLocationCoordinate2D?
     private var hasSetInitialCameraPosition = false
     private var activeSessionID: UUID?
@@ -1247,6 +1191,14 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     func toggleHistoricalRoutesVisibility() {
         isHistoricalRoutesVisible.toggle()
+        markRoutesChanged()
+        markMarkersChanged()
+    }
+
+    func updatePlaybackProgress(_ progress: Double) {
+        playbackProgress = progress
+        markRoutesChanged()
+        markMarkersChanged()
     }
 
     func updateMapCenter(_ coordinate: CLLocationCoordinate2D) {
@@ -1373,6 +1325,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         let points = routeHistoryStore.loadPoints(from: startOfDay, to: endOfDay)
         selectedHistoryRoutePoints = points
         playbackProgress = 1
+        markRoutesChanged()
+        markMarkersChanged()
 
         if let firstPoint = points.first, let lastPoint = points.last {
             selectedHistorySummary = HistoryRouteSummary(
@@ -1392,6 +1346,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         selectedHistoryRoutePoints = []
         selectedHistorySummary = nil
         playbackProgress = 1
+        markRoutesChanged()
+        markMarkersChanged()
     }
 
     private func startTracking() {
@@ -1400,6 +1356,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         activeSessionID = session.id
         activeSessionStartedAt = session.startedAt
         routePoints = []
+        markRoutesChanged()
+        markMarkersChanged()
         collectedPointCount = 0
         locationUpdateCount = 0
         accumulatedBackgroundDuration = 0
@@ -1438,6 +1396,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         reloadHistoricalRouteSegments()
         reloadActiveDaySummaries()
         routePoints = []
+        markRoutesChanged()
+        markMarkersChanged()
         statusMessage = "Tracking stopped with \(collectedPointCount) points."
         refreshStorageAndImpact()
     }
@@ -1497,12 +1457,19 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         guard locationFilter.shouldAccept(location, after: routePoints.last) else { return }
 
         guard let activeSessionID else { return }
+        let beginsAfterTrackingGap = routePoints.last.map {
+            location.timestamp.timeIntervalSince($0.timestamp) > maximumRoutePointGap
+        } ?? false
         let routePoint = RoutePoint(
             location: location,
             sessionID: activeSessionID,
             startsNewSegment: routeNeedsNewSegment
         )
         routePoints.append(routePoint)
+        markRoutesChanged()
+        if routePoint.startsNewSegment || beginsAfterTrackingGap {
+            markMarkersChanged()
+        }
         collectedPointCount = routePoints.count
         routeNeedsNewSegment = false
 
@@ -1537,6 +1504,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func reloadHistoricalRouteSegments() {
         historicalRouteSegments = routeHistoryStore.loadHistoricalRouteSegments()
+        markRoutesChanged()
+        markMarkersChanged()
     }
 
     private func reloadActiveDaySummaries() {
@@ -1545,10 +1514,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func reloadMapNotes() {
         mapNotes = routeHistoryStore.loadMapNotes()
+        markMarkersChanged()
     }
 
     private func reloadPrivateZones() {
         privateZones = routeHistoryStore.loadPrivateZones()
+        mapZoneRevision &+= 1
+        markMarkersChanged()
     }
 
     private func noteTarget(
@@ -1583,41 +1555,22 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private func focusCamera(on points: [RoutePoint]) {
         let coordinates = points.map(\.coordinate)
 
-        guard let firstCoordinate = coordinates.first else {
-            return
-        }
-
-        let latitudeValues = coordinates.map(\.latitude)
-        let longitudeValues = coordinates.map(\.longitude)
-        let minimumLatitude = latitudeValues.min() ?? firstCoordinate.latitude
-        let maximumLatitude = latitudeValues.max() ?? firstCoordinate.latitude
-        let minimumLongitude = longitudeValues.min() ?? firstCoordinate.longitude
-        let maximumLongitude = longitudeValues.max() ?? firstCoordinate.longitude
-        let center = CLLocationCoordinate2D(
-            latitude: (minimumLatitude + maximumLatitude) / 2,
-            longitude: (minimumLongitude + maximumLongitude) / 2
-        )
-        let latitudeDelta = max((maximumLatitude - minimumLatitude) * 1.4, 0.005)
-        let longitudeDelta = max((maximumLongitude - minimumLongitude) * 1.4, 0.005)
-
-        cameraPosition = .region(
-            MKCoordinateRegion(
-                center: center,
-                span: MKCoordinateSpan(
-                    latitudeDelta: latitudeDelta,
-                    longitudeDelta: longitudeDelta
-                )
-            )
+        guard !coordinates.isEmpty else { return }
+        mapCameraCommand = PathlogMapCameraCommand(
+            target: .fit(coordinates)
         )
     }
 
     private func setCameraPosition(centeredOn coordinate: CLLocationCoordinate2D) {
-        cameraPosition = .region(
-            MKCoordinateRegion(
-                center: coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            )
-        )
+        mapCameraCommand = PathlogMapCameraCommand(target: .center(coordinate, zoom: 15.5))
+    }
+
+    private func markRoutesChanged() {
+        mapRouteRevision &+= 1
+    }
+
+    private func markMarkersChanged() {
+        mapMarkerRevision &+= 1
     }
 }
 

@@ -458,7 +458,7 @@ Status:
 
 - completed.
 
-### 15. MapLibre and OpenFreeMap - Planned
+### 15. MapLibre and OpenFreeMap - Completed
 
 Replace the current Apple Maps implementation with an OpenStreetMap-based map.
 
@@ -484,7 +484,7 @@ Done when:
 
 Status:
 
-- planned.
+- completed.
 
 Future deployment:
 
@@ -500,6 +500,7 @@ Scope:
 - let the user long press a building or location on the map;
 - detect the map feature or building polygon under the pressed location when available;
 - visually highlight the selected building polygon;
+- provide subtle haptic feedback when a map location or feature is selected and when a personal place is successfully saved;
 - show a Create Note action;
 - store the exact coordinates of the selected location;
 - store the building or feature ID, or a polygon reference, when available;
@@ -510,6 +511,7 @@ Scope:
 Done when:
 
 - a long press selects the location and highlights its building polygon when the map data provides one;
+- haptic feedback confirms location selection and successful place creation;
 - Create Note opens the note-creation flow for the selected location;
 - the saved personal place retains the pressed coordinates and any available map-feature reference;
 - multiple personal places can be created within one building;
@@ -528,7 +530,7 @@ Status:
 
 The next milestone is:
 
-> Phase 15: replace Apple Maps with MapLibre and OpenFreeMap.
+> Phase 16: create personal places directly from the map.
 
 History deletion by date or time range remains planned for a later phase. It should let the user remove selected local route history without deleting unrelated data.
 

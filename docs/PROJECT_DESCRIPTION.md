@@ -214,7 +214,7 @@ The app starts as a native iOS project:
 
 - Swift;
 - SwiftUI;
-- MapKit;
+- MapLibre Native with OpenFreeMap;
 - Core Location;
 - local data storage.
 
