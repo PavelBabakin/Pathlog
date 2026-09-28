@@ -23,6 +23,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A15F00000000000000000001 /* MapLibre in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +66,7 @@
 			);
 			name = Pathlog;
 			packageProductDependencies = (
+				A15F00000000000000000003 /* MapLibre */,
 			);
 			productName = Pathlog;
 			productReference = D3CC6817305AD52700ABCEB7 /* Pathlog.app */;
@@ -103,11 +105,37 @@
 			productRefGroup = D3CC6818305AD52700ABCEB7 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				A15F00000000000000000002 /* XCRemoteSwiftPackageReference \"maplibre-gl-native-distribution\" */,
+			);
 			targets = (
 				D3CC6816305AD52700ABCEB7 /* Pathlog */,
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXBuildFile section */
+		A15F00000000000000000001 /* MapLibre in Frameworks */ = {isa = PBXBuildFile; productRef = A15F00000000000000000003 /* MapLibre */; };
+/* End PBXBuildFile section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A15F00000000000000000002 /* XCRemoteSwiftPackageReference \"maplibre-gl-native-distribution\" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/maplibre/maplibre-gl-native-distribution";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.28.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A15F00000000000000000003 /* MapLibre */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A15F00000000000000000002 /* XCRemoteSwiftPackageReference \"maplibre-gl-native-distribution\" */;
+			productName = MapLibre;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		D3CC6815305AD52700ABCEB7 /* Resources */ = {
