@@ -14,6 +14,7 @@ import SwiftUI
 import UIKit
 
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+private let maximumRoutePointGap: TimeInterval = 120
 
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
@@ -70,6 +71,11 @@ struct ContentView: View {
                                let coordinate = segment.coordinates.first {
                                 privateGapAnnotation(at: coordinate)
                             }
+
+                            if segment.beginsAfterTrackingGap,
+                               let coordinate = segment.coordinates.first {
+                                trackingGapAnnotation(at: coordinate)
+                            }
                         }
                     }
 
@@ -85,12 +91,24 @@ struct ContentView: View {
                            let coordinate = segment.coordinates.first {
                             privateGapAnnotation(at: coordinate)
                         }
+
+                        if segment.beginsAfterTrackingGap,
+                           (!locationManager.isHistoricalRoutesVisible
+                                || !locationManager.historicalRouteSegments.contains(where: { $0.id == segment.id })),
+                           let coordinate = segment.coordinates.first {
+                            trackingGapAnnotation(at: coordinate)
+                        }
                     }
 
                     ForEach(locationManager.playbackRouteSegments) { segment in
                         if segment.coordinates.count >= 2 {
                             MapPolyline(coordinates: segment.coordinates)
                                 .stroke(.orange, lineWidth: 6)
+                        }
+
+                        if segment.beginsAfterTrackingGap,
+                           let coordinate = segment.coordinates.first {
+                            trackingGapAnnotation(at: coordinate)
                         }
                     }
 
@@ -113,6 +131,11 @@ struct ContentView: View {
                         if segment.beginsAfterPrivateZone,
                            let coordinate = segment.coordinates.first {
                             privateGapAnnotation(at: coordinate)
+                        }
+
+                        if segment.beginsAfterTrackingGap,
+                           let coordinate = segment.coordinates.first {
+                            trackingGapAnnotation(at: coordinate)
                         }
                     }
 
@@ -239,6 +262,17 @@ struct ContentView: View {
         }
     }
 
+    private func trackingGapAnnotation(at coordinate: CLLocationCoordinate2D) -> some MapContent {
+        Annotation("Location recording resumed", coordinate: coordinate) {
+            Image(systemName: "clock.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(5)
+                .background(.gray, in: Circle())
+                .accessibilityLabel("Location recording resumed after a gap")
+        }
+    }
+
     private var statusPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pathlog")
@@ -263,23 +297,6 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-            }
-
-            if locationManager.shouldShowBackgroundPermissionButton {
-                Button {
-                    if locationManager.shouldOpenBackgroundSettings {
-                        openAppSettings()
-                    } else {
-                        locationManager.requestBackgroundLocationAccess()
-                    }
-                } label: {
-                    Label(
-                        locationManager.shouldOpenBackgroundSettings ? "Open Settings" : "Allow Background Tracking",
-                        systemImage: locationManager.shouldOpenBackgroundSettings ? "gearshape" : "location.circle.fill"
-                    )
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
             }
 
             Divider()
@@ -356,6 +373,12 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             } else if locationManager.hasVisiblePrivateZoneGaps {
                 Label("Lock markers show where recording resumed after a private zone.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if locationManager.hasVisibleTrackingGaps {
+                Label("Clock markers show gaps in location recording.", systemImage: "clock.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -886,6 +909,7 @@ struct HistoricalRouteSegment: Identifiable {
     let id: UUID
     var coordinates: [CLLocationCoordinate2D]
     let beginsAfterPrivateZone: Bool
+    let beginsAfterTrackingGap: Bool
 }
 
 struct MapNote: Identifiable {
@@ -939,21 +963,33 @@ struct HistoryRouteSummary {
 private func routeSegments(from points: [RoutePoint]) -> [HistoricalRouteSegment] {
     var segments: [HistoricalRouteSegment] = []
     var previousSessionID: UUID?
+    var previousTimestamp: Date?
     var hasPreviousPoint = false
 
     for point in points {
-        if !hasPreviousPoint || point.sessionID != previousSessionID || point.startsNewSegment {
+        let belongsToPreviousSession = hasPreviousPoint && point.sessionID == previousSessionID
+        let exceedsMaximumGap = previousTimestamp.map {
+            point.timestamp.timeIntervalSince($0) > maximumRoutePointGap
+        } == true
+        let beginsAfterTrackingGap = belongsToPreviousSession
+            && !point.startsNewSegment
+            && exceedsMaximumGap
+        let beginsNewSegment = !belongsToPreviousSession || point.startsNewSegment || beginsAfterTrackingGap
+
+        if beginsNewSegment {
             segments.append(
                 HistoricalRouteSegment(
                     id: point.id,
                     coordinates: [point.coordinate],
-                    beginsAfterPrivateZone: point.startsNewSegment
+                    beginsAfterPrivateZone: point.startsNewSegment,
+                    beginsAfterTrackingGap: beginsAfterTrackingGap
                 )
             )
         } else {
             segments[segments.count - 1].coordinates.append(point.coordinate)
         }
         previousSessionID = point.sessionID
+        previousTimestamp = point.timestamp
         hasPreviousPoint = true
     }
 
@@ -964,8 +1000,6 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var cameraPosition: MapCameraPosition = .automatic
     @Published var statusMessage = "Requesting your location..."
     @Published var shouldShowPermissionButton = false
-    @Published var shouldShowBackgroundPermissionButton = false
-    @Published var shouldOpenBackgroundSettings = false
     @Published private(set) var reminderStatusMessage: String?
     @Published private(set) var shouldOpenNotificationSettings = false
     @Published var isTracking = false
@@ -1004,6 +1038,12 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         routeLineSegments.contains(where: \.beginsAfterPrivateZone)
             || selectedHistoryRouteSegments.contains(where: \.beginsAfterPrivateZone)
             || (isHistoricalRoutesVisible && historicalRouteSegments.contains(where: \.beginsAfterPrivateZone))
+    }
+
+    var hasVisibleTrackingGaps: Bool {
+        routeLineSegments.contains(where: \.beginsAfterTrackingGap)
+            || selectedHistoryRouteSegments.contains(where: \.beginsAfterTrackingGap)
+            || (isHistoricalRoutesVisible && historicalRouteSegments.contains(where: \.beginsAfterTrackingGap))
     }
 
     var mapCenterForPrivateZone: CLLocationCoordinate2D? {
@@ -1080,12 +1120,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     var backgroundTrackingStatusText: String {
         switch manager.authorizationStatus {
-        case .authorizedAlways:
-            "Background tracking enabled"
-        case .authorizedWhenInUse:
-            "Tracking works while Pathlog is open"
+        case .authorizedAlways, .authorizedWhenInUse:
+            "Background recording is active while tracking"
         case .denied, .notDetermined, .restricted:
-            "Background tracking unavailable"
+            "Location access unavailable"
         @unknown default:
             "Background tracking status unknown"
         }
@@ -1119,40 +1157,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         switch manager.authorizationStatus {
         case .notDetermined:
             manager.requestWhenInUseAuthorization()
-        case .authorizedWhenInUse:
+        case .authorizedWhenInUse, .authorizedAlways:
             shouldShowPermissionButton = false
-            shouldShowBackgroundPermissionButton = true
-            statusMessage = "Showing your current location. Allow background tracking to keep recording after leaving the app."
-            manager.startUpdatingLocation()
-        case .authorizedAlways:
-            shouldShowPermissionButton = false
-            shouldShowBackgroundPermissionButton = false
             statusMessage = "Showing your current location."
             manager.startUpdatingLocation()
         case .denied, .restricted:
             shouldShowPermissionButton = true
-            shouldShowBackgroundPermissionButton = false
             statusMessage = "Location access is disabled. Enable it in Settings to show your position."
-        @unknown default:
-            statusMessage = "Location status is unknown."
-        }
-    }
-
-    func requestBackgroundLocationAccess() {
-        switch manager.authorizationStatus {
-        case .authorizedWhenInUse:
-            manager.requestAlwaysAuthorization()
-            shouldOpenBackgroundSettings = true
-            statusMessage = "Requesting background tracking access."
-        case .authorizedAlways:
-            shouldShowBackgroundPermissionButton = false
-            shouldOpenBackgroundSettings = false
-            statusMessage = "Background tracking is enabled."
-        case .notDetermined:
-            requestLocationAccess()
-        case .denied, .restricted:
-            shouldShowPermissionButton = true
-            statusMessage = "Location access is disabled. Enable Always access in Settings for background tracking."
         @unknown default:
             statusMessage = "Location status is unknown."
         }
@@ -1171,7 +1182,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         }
     }
 
-    func refreshTrackingReminder(requestBackgroundAccessAfterSetup: Bool = false) {
+    func refreshTrackingReminder() {
         guard isTracking else { return }
 
         Task {
@@ -1192,10 +1203,6 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             case .failed:
                 reminderStatusMessage = "Could not schedule tracking reminders"
                 shouldOpenNotificationSettings = false
-            }
-
-            if requestBackgroundAccessAfterSetup && manager.authorizationStatus == .authorizedWhenInUse {
-                requestBackgroundLocationAccess()
             }
         }
     }
@@ -1404,10 +1411,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         manager.startUpdatingLocation()
         reminderStatusMessage = "Setting up tracking reminders"
         shouldOpenNotificationSettings = false
-        refreshTrackingReminder(requestBackgroundAccessAfterSetup: manager.authorizationStatus == .authorizedWhenInUse)
-        statusMessage = manager.authorizationStatus == .authorizedAlways
-            ? "Tracking is active, including in the background."
-            : "Tracking is active while Pathlog remains open."
+        refreshTrackingReminder()
+        statusMessage = "Tracking is active, including in the background."
     }
 
     private func stopTracking() {
@@ -1446,9 +1451,6 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         requestLocationAccess()
-        if manager.authorizationStatus == .authorizedAlways {
-            shouldOpenBackgroundSettings = false
-        }
         configureBackgroundTracking()
         if isTracking {
             updateStatusAfterLocationUpdate()
@@ -1456,8 +1458,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
-        latestKnownCoordinate = location.coordinate
+        guard let latestLocation = locations.max(by: { $0.timestamp < $1.timestamp }) else { return }
+        latestKnownCoordinate = latestLocation.coordinate
 
         if isTracking {
             locationUpdateCount += locations.count
@@ -1466,12 +1468,19 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         updateStatusAfterLocationUpdate()
 
         if !hasSetInitialCameraPosition {
-            setCameraPosition(centeredOn: location.coordinate)
+            setCameraPosition(centeredOn: latestLocation.coordinate)
             hasSetInitialCameraPosition = true
         }
 
         guard isTracking else { return }
 
+        for location in locations.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard let activeSessionStartedAt, location.timestamp >= activeSessionStartedAt else { continue }
+            processLocationForTracking(location)
+        }
+    }
+
+    private func processLocationForTracking(_ location: CLLocation) {
         if privateZones.contains(where: { $0.contains(location) }) {
             routeNeedsNewSegment = true
             isWithinPrivateZone = true
@@ -1510,12 +1519,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func updateStatusAfterLocationUpdate() {
         shouldShowPermissionButton = false
-        shouldShowBackgroundPermissionButton = manager.authorizationStatus == .authorizedWhenInUse
 
         if isTracking {
-            statusMessage = manager.authorizationStatus == .authorizedAlways
-                ? "Tracking is active, including in the background."
-                : "Tracking is active while Pathlog remains open."
+            statusMessage = "Tracking is active, including in the background."
         } else {
             statusMessage = "Showing your current location."
         }
@@ -1523,8 +1529,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func configureBackgroundTracking() {
         manager.pausesLocationUpdatesAutomatically = false
-        manager.allowsBackgroundLocationUpdates = isTracking && manager.authorizationStatus == .authorizedAlways
-        manager.showsBackgroundLocationIndicator = isTracking && manager.authorizationStatus == .authorizedAlways
+        let hasLocationAuthorization = manager.authorizationStatus == .authorizedAlways
+            || manager.authorizationStatus == .authorizedWhenInUse
+        manager.allowsBackgroundLocationUpdates = isTracking && hasLocationAuthorization
+        manager.showsBackgroundLocationIndicator = isTracking && hasLocationAuthorization
     }
 
     private func reloadHistoricalRouteSegments() {
@@ -1965,6 +1973,7 @@ private final class RouteHistoryStore {
                 p.id,
                 p.latitude,
                 p.longitude,
+                p.timestamp,
                 p.starts_new_segment
             FROM route_sessions s
             INNER JOIN route_points p ON p.session_id = s.id
@@ -1974,6 +1983,7 @@ private final class RouteHistoryStore {
             """
         var segments: [HistoricalRouteSegmentBuilder] = []
         var previousSessionID: UUID?
+        var previousTimestamp: Date?
         var currentSegmentIndex: Int?
 
         withPreparedStatement(sql) { statement in
@@ -1992,8 +2002,16 @@ private final class RouteHistoryStore {
                     latitude: sqlite3_column_double(statement, 2),
                     longitude: sqlite3_column_double(statement, 3)
                 )
-                let beginsAfterPrivateZone = sqlite3_column_int(statement, 4) != 0
-                let startsSegment = previousSessionID != sessionID || beginsAfterPrivateZone
+                let timestamp = Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))
+                let beginsAfterPrivateZone = sqlite3_column_int(statement, 5) != 0
+                let beginsAfterTrackingGap = previousSessionID == sessionID
+                    && !beginsAfterPrivateZone
+                    && previousTimestamp.map {
+                        timestamp.timeIntervalSince($0) > maximumRoutePointGap
+                    } == true
+                let startsSegment = previousSessionID != sessionID
+                    || beginsAfterPrivateZone
+                    || beginsAfterTrackingGap
 
                 if !startsSegment, let segmentIndex = currentSegmentIndex {
                     segments[segmentIndex].coordinates.append(coordinate)
@@ -2003,21 +2021,28 @@ private final class RouteHistoryStore {
                         HistoricalRouteSegmentBuilder(
                             id: pointID,
                             coordinates: [coordinate],
-                            beginsAfterPrivateZone: beginsAfterPrivateZone
+                            beginsAfterPrivateZone: beginsAfterPrivateZone,
+                            beginsAfterTrackingGap: beginsAfterTrackingGap
                         )
                     )
                 }
                 previousSessionID = sessionID
+                previousTimestamp = timestamp
             }
         }
 
         return segments
-            .filter { $0.coordinates.count >= 2 || $0.beginsAfterPrivateZone }
+            .filter {
+                $0.coordinates.count >= 2
+                    || $0.beginsAfterPrivateZone
+                    || $0.beginsAfterTrackingGap
+            }
             .map {
                 HistoricalRouteSegment(
                     id: $0.id,
                     coordinates: $0.coordinates,
-                    beginsAfterPrivateZone: $0.beginsAfterPrivateZone
+                    beginsAfterPrivateZone: $0.beginsAfterPrivateZone,
+                    beginsAfterTrackingGap: $0.beginsAfterTrackingGap
                 )
             }
     }
@@ -2461,4 +2486,5 @@ private struct HistoricalRouteSegmentBuilder {
     let id: UUID
     var coordinates: [CLLocationCoordinate2D]
     let beginsAfterPrivateZone: Bool
+    let beginsAfterTrackingGap: Bool
 }
